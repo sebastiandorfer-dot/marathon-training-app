@@ -46,7 +46,7 @@ const TYPE_ICONS = {
 
 function todayStr() { return new Date().toISOString().split('T')[0] }
 
-export default function TodayTab({ user, profile, trainingPlan, completedWorkoutIds, onToggleComplete, workoutLogs, onLogAdded, stravaRuns = [], onConfirmRacePlan }) {
+export default function TodayTab({ user, profile, trainingPlan, completedWorkoutIds, onToggleComplete, workoutLogs, onLogAdded, onLogDeleted, stravaRuns = [], onConfirmRacePlan }) {
   const trainingMode = profile.training_mode || 'race'
   const hasMarathon = !!profile.marathon_date
 
@@ -322,6 +322,7 @@ export default function TodayTab({ user, profile, trainingPlan, completedWorkout
                 {recentLogs.map(log => {
                   const color = TYPE_COLORS[log.workout_type] || 'var(--c-text-2)'
                   const icon = TYPE_ICONS[log.workout_type] || '📝'
+                  const rpeEmoji = log.rpe ? ['', '😌', '💪', '🔥'][log.rpe] : null
                   return (
                     <div key={log.id} className="card card-sm" style={{ display: 'flex', gap: 'var(--sp-3)', alignItems: 'center' }}>
                       <div style={{
@@ -333,8 +334,9 @@ export default function TodayTab({ user, profile, trainingPlan, completedWorkout
                         {icon}
                       </div>
                       <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ fontWeight: 600, fontSize: '0.9rem', color: 'var(--c-text)' }}>
+                        <div style={{ fontWeight: 600, fontSize: '0.9rem', color: 'var(--c-text)', display: 'flex', alignItems: 'center', gap: 6 }}>
                           {WORKOUT_TYPES.find(t => t.value === log.workout_type)?.label.replace(/^.\s/, '') || log.workout_type}
+                          {rpeEmoji && <span style={{ fontSize: 14 }}>{rpeEmoji}</span>}
                         </div>
                         <div style={{ fontSize: '0.8125rem', color: 'var(--c-text-2)' }}>
                           {log.distance_km ? `${log.distance_km} km` : ''}
@@ -345,6 +347,17 @@ export default function TodayTab({ user, profile, trainingPlan, completedWorkout
                       <div style={{ fontSize: '0.75rem', color: 'var(--c-text-3)', flexShrink: 0 }}>
                         {formatRelativeDate(log.workout_date)}
                       </div>
+                      {onLogDeleted && (
+                        <button
+                          onClick={() => onLogDeleted(log.id)}
+                          style={{
+                            background: 'transparent', border: 'none', color: 'var(--c-text-3)',
+                            cursor: 'pointer', padding: '4px 6px', fontSize: 16, flexShrink: 0,
+                            borderRadius: 6, lineHeight: 1,
+                          }}
+                          title="Löschen"
+                        >🗑</button>
+                      )}
                     </div>
                   )
                 })}

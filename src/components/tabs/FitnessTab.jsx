@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { supabase } from '../../supabase'
 import { getStravaAuthUrl, fetchAllStravaRuns, getValidToken } from '../../utils/stravaUtils'
 import {
@@ -111,6 +111,17 @@ export default function FitnessTab({ user, profile, onProfileUpdate, onRunsUpdat
       setSyncing(false)
     }
   }, [profile, user.id, onProfileUpdate])
+
+  // ── Auto-sync on mount if last sync >4h ago ────────────────────
+  const autoSyncRef = useRef(false)
+  useEffect(() => {
+    if (!isConnected || autoSyncRef.current) return
+    const lastSyncTime = lastSync ? new Date(lastSync).getTime() : 0
+    if (Date.now() - lastSyncTime > 4 * 60 * 60 * 1000) {
+      autoSyncRef.current = true
+      handleSync()
+    }
+  }, [isConnected, handleSync, lastSync])
 
   return (
     <div className="screen">

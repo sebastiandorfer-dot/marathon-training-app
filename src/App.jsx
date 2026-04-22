@@ -3,6 +3,7 @@ import { supabase } from './supabase'
 import { generateTrainingPlan, getTotalPlanWeeks } from './utils/planUtils'
 import { deriveMaxHR, calculateVO2max, predictMarathonPaceFromVO2max } from './utils/fitnessUtils'
 
+import PWAInstallBanner from './components/PWAInstallBanner'
 import Auth from './components/Auth'
 import Onboarding from './components/Onboarding'
 import GeneratingPlan from './components/GeneratingPlan'
@@ -245,6 +246,19 @@ export default function App() {
     setWorkoutLogs(prev => [newLog, ...prev])
   }, [])
 
+  // ── Delete workout log ─────────────────────────────────────────
+  const handleLogDeleted = useCallback(async (logId) => {
+    setWorkoutLogs(prev => prev.filter(l => l.id !== logId))
+    try {
+      await supabase.from('workout_logs').delete().eq('id', logId).eq('user_id', user.id)
+    } catch (err) {
+      console.error('Failed to delete log:', err)
+      // Reload logs on failure
+      const { data } = await supabase.from('workout_logs').select('*').eq('user_id', user.id).order('workout_date', { ascending: false })
+      if (data) setWorkoutLogs(data)
+    }
+  }, [user])
+
   // ── Update profile ─────────────────────────────────────────────
   const handleProfileUpdate = useCallback((updatedProfile) => {
     setProfile(updatedProfile)
@@ -343,6 +357,7 @@ export default function App() {
               onToggleComplete={handleToggleComplete}
               workoutLogs={workoutLogs}
               onLogAdded={handleLogAdded}
+              onLogDeleted={handleLogDeleted}
               stravaRuns={stravaRuns}
               onConfirmRacePlan={handleConfirmRacePlan}
             />
@@ -392,6 +407,7 @@ export default function App() {
             />
           )}
         </div>
+        <PWAInstallBanner />
         <TabBar activeTab={activeTab} onTabChange={setActiveTab} />
       </div>
     )
