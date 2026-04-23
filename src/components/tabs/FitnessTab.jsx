@@ -557,6 +557,11 @@ function TrainingLoadCard({ mileage }) {
 
   if (prev4avg === 0 || thisWeekKm === 0) return null
 
+  // How far through the week are we? (0=Mon, 6=Sun)
+  const dayOfWeek = new Date().getDay() === 0 ? 6 : new Date().getDay() - 1
+  const weekProgress = (dayOfWeek + 1) / 7 // fraction of week elapsed
+  const weekInProgress = dayOfWeek < 6 // not yet Sunday
+
   const changePct = Math.round(((thisWeekKm - prev4avg) / prev4avg) * 100)
 
   const { color, bg, icon, label, hint } =
@@ -610,6 +615,11 @@ function TrainingLoadCard({ mileage }) {
           </div>
         </div>
         <p style={{ fontSize: 12, color: 'var(--c-text-2)', margin: 0, lineHeight: 1.5 }}>{hint}</p>
+        {weekInProgress && (
+          <p style={{ fontSize: 11, color: 'var(--c-text-3)', margin: '6px 0 0', fontStyle: 'italic' }}>
+            Woche noch nicht abgeschlossen ({Math.round(weekProgress * 100)}% der Woche vorbei)
+          </p>
+        )}
       </div>
     </div>
   )
@@ -617,7 +627,7 @@ function TrainingLoadCard({ mileage }) {
 
 // ── Personal Records Card ──────────────────────────────────────────────────────
 function PersonalRecordsCard({ runs }) {
-  if (!runs || runs.length < 3) return null
+  if (!runs || runs.length < 1) return null
 
   const longestRun = runs.reduce((best, r) =>
     r.distance > (best?.distance || 0) ? r : best, null)

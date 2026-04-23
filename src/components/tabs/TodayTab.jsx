@@ -13,17 +13,17 @@ import {
 import BuildPhaseToday from '../BuildPhaseToday'
 
 const WORKOUT_TYPES = [
-  { value: 'easy',     label: '🏃 Easy Run' },
-  { value: 'tempo',    label: '⚡ Tempo Run' },
-  { value: 'interval', label: '🔥 Intervals' },
-  { value: 'long',     label: '🛣️ Long Run' },
-  { value: 'recovery', label: '🌿 Recovery Run' },
-  { value: 'cross',    label: '🚴 Cycling' },
-  { value: 'swim',     label: '🏊 Swimming' },
-  { value: 'hike',     label: '🥾 Hiking' },
-  { value: 'strength', label: '🏋️ Strength' },
+  { value: 'easy',     label: '🏃 Easy Lauf' },
+  { value: 'tempo',    label: '⚡ Tempo Lauf' },
+  { value: 'interval', label: '🔥 Intervalle' },
+  { value: 'long',     label: '🛣️ Langer Lauf' },
+  { value: 'recovery', label: '🌿 Regeneration' },
+  { value: 'cross',    label: '🚴 Radfahren' },
+  { value: 'swim',     label: '🏊 Schwimmen' },
+  { value: 'hike',     label: '🥾 Wandern' },
+  { value: 'strength', label: '🏋️ Krafttraining' },
   { value: 'yoga',     label: '🧘 Yoga' },
-  { value: 'other',    label: '📝 Other' },
+  { value: 'other',    label: '📝 Sonstiges' },
 ]
 
 const RPE_OPTIONS = [
@@ -89,7 +89,6 @@ export default function TodayTab({ user, profile, trainingPlan, completedWorkout
   })
   const [logging, setLogging] = useState(false)
   const [logError, setLogError] = useState('')
-  const [logSuccess, setLogSuccess] = useState(false)
   const [rpeLogId, setRpeLogId] = useState(null)
   const [rpeSaving, setRpeSaving] = useState(false)
 
@@ -156,9 +155,9 @@ export default function TodayTab({ user, profile, trainingPlan, completedWorkout
           <p style={{ fontSize: '0.8125rem', color: 'var(--c-text-2)', marginTop: 2 }}>
             {trainingMode === 'fitness' ? 'Fitness-Modus · Aufbauphase' :
              trainingMode === 'tracking' ? 'Training-Tracker' :
-             pos.status === 'active' ? `Training Week ${pos.week} of ${pos.totalWeeks}` :
-             pos.status === 'not_started' ? `Starts in ${pos.daysUntilStart} days` :
-             'Plan complete!'}
+             pos.status === 'active' ? `Trainingswoche ${pos.week} von ${pos.totalWeeks}` :
+             pos.status === 'not_started' ? `Startet in ${pos.daysUntilStart} Tagen` :
+             'Plan abgeschlossen!'}
           </p>
         </div>
         {daysLeft !== null && (
@@ -308,10 +307,9 @@ export default function TodayTab({ user, profile, trainingPlan, completedWorkout
               </div>
 
               {logError && <div className="alert alert-error"><span>⚠</span> {logError}</div>}
-              {logSuccess && <div className="alert alert-success"><span>✓</span> Gespeichert!</div>}
 
-              <button className="btn btn-primary btn-lg" onClick={submitLog} disabled={logging || logSuccess}>
-                {logging ? 'Speichern…' : logSuccess ? '✓ Gespeichert!' : 'Eintragen'}
+              <button className="btn btn-primary btn-lg" onClick={submitLog} disabled={logging}>
+                {logging ? 'Speichern…' : 'Eintragen'}
               </button>
             </div>
           )}
@@ -396,37 +394,48 @@ export default function TodayTab({ user, profile, trainingPlan, completedWorkout
 
       {/* RPE Post-Log Modal */}
       {rpeLogId && (
-        <div style={{
-          position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: 200,
-          background: 'var(--c-bg)', borderTop: '1.5px solid var(--c-border)',
-          borderRadius: '20px 20px 0 0',
-          padding: '20px 20px 44px',
-          display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 16,
-          boxShadow: '0 -8px 32px rgba(0,0,0,0.15)',
-        }}>
-          <div style={{ width: 36, height: 4, borderRadius: 2, background: 'var(--c-border)', marginBottom: 4 }} />
-          <div style={{ fontWeight: 700, fontSize: 18, color: 'var(--c-text)' }}>Wie war das Training? 💬</div>
-          <div style={{ display: 'flex', gap: 12, width: '100%' }}>
-            {RPE_OPTIONS.map(r => (
-              <button key={r.value} onClick={() => saveRpe(r.value)} disabled={rpeSaving}
-                style={{
-                  flex: 1, padding: '18px 8px', borderRadius: 14,
-                  border: `2px solid ${r.color}33`,
-                  background: `${r.color}11`,
-                  cursor: 'pointer', fontFamily: 'var(--font)',
-                  display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6,
-                  transition: 'all 0.15s',
-                }}>
-                <span style={{ fontSize: 30 }}>{r.emoji}</span>
-                <span style={{ fontSize: 13, fontWeight: 700, color: r.color }}>{r.label}</span>
-              </button>
-            ))}
+        <>
+          {/* Backdrop */}
+          <div onClick={() => setRpeLogId(null)} style={{
+            position: 'fixed', inset: 0, zIndex: 199,
+            background: 'rgba(0,0,0,0.45)',
+          }} />
+          <div style={{
+            position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: 200,
+            background: 'var(--c-bg)', borderTop: '1.5px solid var(--c-border)',
+            borderRadius: '20px 20px 0 0',
+            padding: '20px 20px 44px',
+            display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 16,
+            boxShadow: '0 -8px 32px rgba(0,0,0,0.15)',
+          }}>
+            <div style={{ width: 36, height: 4, borderRadius: 2, background: 'var(--c-border)', marginBottom: 4 }} />
+            <div style={{ fontWeight: 700, fontSize: 18, color: 'var(--c-text)' }}>Wie war das Training? 💬</div>
+            <p style={{ fontSize: 13, color: 'var(--c-text-3)', margin: '-8px 0 0', textAlign: 'center' }}>
+              Das hilft mir, deinen nächsten Plan anzupassen.
+            </p>
+            <div style={{ display: 'flex', gap: 12, width: '100%' }}>
+              {RPE_OPTIONS.map(r => (
+                <button key={r.value} onClick={() => saveRpe(r.value)} disabled={rpeSaving}
+                  style={{
+                    flex: 1, padding: '18px 8px', borderRadius: 14,
+                    border: `2px solid ${r.color}44`,
+                    background: `${r.color}11`,
+                    cursor: 'pointer', fontFamily: 'var(--font)',
+                    display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6,
+                    transition: 'all 0.15s',
+                    opacity: rpeSaving ? 0.6 : 1,
+                  }}>
+                  <span style={{ fontSize: 30 }}>{r.emoji}</span>
+                  <span style={{ fontSize: 13, fontWeight: 700, color: r.color }}>{r.label}</span>
+                </button>
+              ))}
+            </div>
+            <button onClick={() => setRpeLogId(null)}
+              style={{ background: 'none', border: 'none', color: 'var(--c-text-3)', fontSize: 14, cursor: 'pointer', fontFamily: 'var(--font)', padding: '4px 12px' }}>
+              Überspringen
+            </button>
           </div>
-          <button onClick={() => setRpeLogId(null)}
-            style={{ background: 'none', border: 'none', color: 'var(--c-text-3)', fontSize: 14, cursor: 'pointer', fontFamily: 'var(--font)', padding: '4px 12px' }}>
-            Überspringen
-          </button>
-        </div>
+        </>
       )}
     </div>
   )
@@ -522,14 +531,30 @@ function WeeklySummaryCard({ workoutLogs, profile }) {
   const lastMondayStr = lastMonday.toISOString().split('T')[0]
   const lastWeek = workoutLogs.filter(l => l.workout_date >= lastMondayStr && l.workout_date < mondayStr)
 
-  if (thisWeek.length === 0 && lastWeek.length === 0) return null
+  // Don't show on Monday morning if nothing logged yet this week — would show 0/X confusingly
+  const isMondayEmpty = today.getDay() === 1 && thisWeek.length === 0
+  if ((thisWeek.length === 0 && lastWeek.length === 0) || isMondayEmpty) return null
+
+  // If this week is empty but last week has data, show last week's summary instead
+  const showingLastWeek = thisWeek.length === 0 && lastWeek.length > 0
+  const activeLogs = showingLastWeek ? lastWeek : thisWeek
+  const activeMonday = showingLastWeek ? lastMonday : monday
+  const activeSunday = showingLastWeek
+    ? new Date(lastMonday.getTime() + 6 * 86400000)
+    : sunday
 
   const planned = profile.sessions_per_week || 3
-  const done = thisWeek.length
-  const totalKm = Math.round(thisWeek.reduce((s, l) => s + (l.distance_km || 0), 0) * 10) / 10
-  const lastKm  = Math.round(lastWeek.reduce((s, l) => s + (l.distance_km || 0), 0) * 10) / 10
+  const done = activeLogs.length
+  const totalKm = Math.round(activeLogs.reduce((s, l) => s + (l.distance_km || 0), 0) * 10) / 10
 
-  const rpeItems = thisWeek.filter(l => l.rpe != null)
+  // For km trend: compare this week vs last week (only meaningful when showing this week)
+  const lastKm = Math.round(lastWeek.reduce((s, l) => s + (l.distance_km || 0), 0) * 10) / 10
+  const kmDiff = totalKm - lastKm
+  const kmTrend = !showingLastWeek && lastKm > 0
+    ? (kmDiff >= 0 ? `+${kmDiff.toFixed(1)}` : kmDiff.toFixed(1))
+    : null
+
+  const rpeItems = activeLogs.filter(l => l.rpe != null)
   const avgRpe = rpeItems.length > 0
     ? rpeItems.reduce((s, l) => s + l.rpe, 0) / rpeItems.length : null
   const rpeEmoji = avgRpe === null ? null : avgRpe < 1.5 ? '😌' : avgRpe < 2.5 ? '💪' : '🔥'
@@ -537,18 +562,17 @@ function WeeklySummaryCard({ workoutLogs, profile }) {
   const pct = Math.min(1, done / Math.max(planned, 1))
   const barColor = pct >= 1 ? '#22c55e' : pct >= 0.5 ? '#4a9eff' : 'var(--c-primary)'
 
-  const kmDiff = totalKm - lastKm
-  const kmTrend = lastKm === 0 ? null : kmDiff > 0 ? `+${kmDiff.toFixed(1)} km` : `${kmDiff.toFixed(1)} km`
-
   return (
     <div style={{
       background: 'var(--c-card)', border: '1px solid var(--c-border)',
       borderRadius: 14, padding: '14px 16px',
     }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
-        <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--c-text)' }}>Diese Woche</div>
+        <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--c-text)' }}>
+          {showingLastWeek ? 'Letzte Woche' : 'Diese Woche'}
+        </div>
         <div style={{ fontSize: 12, color: 'var(--c-text-3)' }}>
-          {monday.toLocaleDateString('de-AT', { day: 'numeric', month: 'short' })} – {sunday.toLocaleDateString('de-AT', { day: 'numeric', month: 'short' })}
+          {activeMonday.toLocaleDateString('de-AT', { day: 'numeric', month: 'short' })} – {activeSunday.toLocaleDateString('de-AT', { day: 'numeric', month: 'short' })}
         </div>
       </div>
 
@@ -557,7 +581,7 @@ function WeeklySummaryCard({ workoutLogs, profile }) {
         <div style={{ height: '100%', width: `${pct * 100}%`, background: barColor, borderRadius: 999, transition: 'width 0.5s ease' }} />
       </div>
 
-      <div style={{ display: 'flex', gap: 0 }}>
+      <div style={{ display: 'flex' }}>
         <div style={{ flex: 1, textAlign: 'center' }}>
           <div style={{ fontSize: 20, fontWeight: 800, color: done >= planned ? '#22c55e' : 'var(--c-text)', lineHeight: 1 }}>
             {done}<span style={{ fontSize: 13, fontWeight: 500, color: 'var(--c-text-3)' }}>/{planned}</span>
@@ -566,16 +590,21 @@ function WeeklySummaryCard({ workoutLogs, profile }) {
         </div>
         {totalKm > 0 && (
           <div style={{ flex: 1, textAlign: 'center' }}>
-            <div style={{ fontSize: 20, fontWeight: 800, color: 'var(--c-text)', lineHeight: 1 }}>{totalKm}</div>
-            <div style={{ fontSize: 11, color: 'var(--c-text-3)', marginTop: 2 }}>
-              km {kmTrend && <span style={{ color: kmDiff > 0 ? '#22c55e' : '#ef4444' }}>({kmTrend})</span>}
+            <div style={{ fontSize: 20, fontWeight: 800, color: 'var(--c-text)', lineHeight: 1 }}>
+              {totalKm}
+              {kmTrend && (
+                <span style={{ fontSize: 12, fontWeight: 600, color: kmDiff >= 0 ? '#22c55e' : '#ef4444', marginLeft: 4 }}>
+                  {kmTrend}
+                </span>
+              )}
             </div>
+            <div style={{ fontSize: 11, color: 'var(--c-text-3)', marginTop: 2 }}>km</div>
           </div>
         )}
         {rpeEmoji && (
           <div style={{ flex: 1, textAlign: 'center' }}>
             <div style={{ fontSize: 22, lineHeight: 1 }}>{rpeEmoji}</div>
-            <div style={{ fontSize: 11, color: 'var(--c-text-3)', marginTop: 2 }}>Anstrengung</div>
+            <div style={{ fontSize: 11, color: 'var(--c-text-3)', marginTop: 2 }}>Ø Anstrengung</div>
           </div>
         )}
       </div>

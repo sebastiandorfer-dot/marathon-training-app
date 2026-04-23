@@ -82,7 +82,6 @@ export default function BuildPhaseToday({
     rpe: null,
   })
   const [logging, setLogging]     = useState(false)
-  const [logSuccess, setLogSuccess] = useState(false)
   const [rpeLogId, setRpeLogId]   = useState(null)
   const [rpeSaving, setRpeSaving] = useState(false)
 
@@ -478,45 +477,55 @@ Antworte mit einem JSON-Objekt:
             </div>
           </div>
 
-          <button className="btn btn-primary btn-lg" onClick={submitLog} disabled={logging || logSuccess}>
-            {logging ? 'Speichern…' : logSuccess ? '✓ Gespeichert!' : 'Eintragen'}
+          <button className="btn btn-primary btn-lg" onClick={submitLog} disabled={logging}>
+            {logging ? 'Speichern…' : 'Eintragen'}
           </button>
         </div>
       )}
 
       {/* RPE Post-Log Modal */}
       {rpeLogId && (
-        <div style={{
-          position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: 200,
-          background: 'var(--c-bg)', borderTop: '1.5px solid var(--c-border)',
-          borderRadius: '20px 20px 0 0',
-          padding: '20px 20px 44px',
-          display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 16,
-          boxShadow: '0 -8px 32px rgba(0,0,0,0.15)',
-        }}>
-          <div style={{ width: 36, height: 4, borderRadius: 2, background: 'var(--c-border)', marginBottom: 4 }} />
-          <div style={{ fontWeight: 700, fontSize: 18, color: 'var(--c-text)' }}>Wie war das Training? 💬</div>
-          <div style={{ display: 'flex', gap: 12, width: '100%' }}>
-            {RPE_OPTIONS.map(r => (
-              <button key={r.value} onClick={() => saveRpe(r.value)} disabled={rpeSaving}
-                style={{
-                  flex: 1, padding: '18px 8px', borderRadius: 14,
-                  border: `2px solid ${r.color}33`,
-                  background: `${r.color}11`,
-                  cursor: 'pointer', fontFamily: 'var(--font)',
-                  display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6,
-                  transition: 'all 0.15s',
-                }}>
-                <span style={{ fontSize: 30 }}>{r.emoji}</span>
-                <span style={{ fontSize: 13, fontWeight: 700, color: r.color }}>{r.label}</span>
-              </button>
-            ))}
+        <>
+          <div onClick={() => setRpeLogId(null)} style={{
+            position: 'fixed', inset: 0, zIndex: 199,
+            background: 'rgba(0,0,0,0.45)',
+          }} />
+          <div style={{
+            position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: 200,
+            background: 'var(--c-bg)', borderTop: '1.5px solid var(--c-border)',
+            borderRadius: '20px 20px 0 0',
+            padding: '20px 20px 44px',
+            display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 16,
+            boxShadow: '0 -8px 32px rgba(0,0,0,0.15)',
+          }}>
+            <div style={{ width: 36, height: 4, borderRadius: 2, background: 'var(--c-border)', marginBottom: 4 }} />
+            <div style={{ fontWeight: 700, fontSize: 18, color: 'var(--c-text)' }}>Wie war das Training? 💬</div>
+            <p style={{ fontSize: 13, color: 'var(--c-text-3)', margin: '-8px 0 0', textAlign: 'center' }}>
+              Das hilft mir, deinen nächsten Plan anzupassen.
+            </p>
+            <div style={{ display: 'flex', gap: 12, width: '100%' }}>
+              {RPE_OPTIONS.map(r => (
+                <button key={r.value} onClick={() => saveRpe(r.value)} disabled={rpeSaving}
+                  style={{
+                    flex: 1, padding: '18px 8px', borderRadius: 14,
+                    border: `2px solid ${r.color}44`,
+                    background: `${r.color}11`,
+                    cursor: 'pointer', fontFamily: 'var(--font)',
+                    display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6,
+                    transition: 'all 0.15s',
+                    opacity: rpeSaving ? 0.6 : 1,
+                  }}>
+                  <span style={{ fontSize: 30 }}>{r.emoji}</span>
+                  <span style={{ fontSize: 13, fontWeight: 700, color: r.color }}>{r.label}</span>
+                </button>
+              ))}
+            </div>
+            <button onClick={() => setRpeLogId(null)}
+              style={{ background: 'none', border: 'none', color: 'var(--c-text-3)', fontSize: 14, cursor: 'pointer', fontFamily: 'var(--font)', padding: '4px 12px' }}>
+              Überspringen
+            </button>
           </div>
-          <button onClick={() => setRpeLogId(null)}
-            style={{ background: 'none', border: 'none', color: 'var(--c-text-3)', fontSize: 14, cursor: 'pointer', fontFamily: 'var(--font)', padding: '4px 12px' }}>
-            Überspringen
-          </button>
-        </div>
+        </>
       )}
     </div>
   )
