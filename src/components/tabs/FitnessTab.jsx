@@ -129,7 +129,7 @@ export default function FitnessTab({ user, profile, onProfileUpdate, onRunsUpdat
         <div>
           <h2 style={{ fontSize: '1.125rem' }}>Fitness</h2>
           <p style={{ fontSize: '0.8125rem', color: 'var(--c-text-2)', marginTop: 2 }}>
-            {isConnected ? `${runs.length} runs analysed` : 'Connect Strava to start'}
+            {isConnected ? `${runs.length} Läufe analysiert` : 'Verbinde Strava für deine Prognose'}
           </p>
         </div>
         {isConnected && (
@@ -144,7 +144,7 @@ export default function FitnessTab({ user, profile, onProfileUpdate, onRunsUpdat
               <path d="M23 4v6h-6M1 20v-6h6"/>
               <path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/>
             </svg>
-            {syncing ? 'Syncing…' : 'Sync'}
+            {syncing ? 'Synchronisiere…' : 'Sync'}
           </button>
         )}
       </div>
@@ -192,9 +192,9 @@ export default function FitnessTab({ user, profile, onProfileUpdate, onRunsUpdat
           {!isConnected ? (
             <div className="card" style={{ textAlign: 'center', padding: 'var(--sp-8)' }}>
               <div style={{ fontSize: '2.5rem', marginBottom: 'var(--sp-4)' }}>🔗</div>
-              <h3 style={{ marginBottom: 'var(--sp-2)' }}>Connect Strava</h3>
+              <h3 style={{ marginBottom: 'var(--sp-2)' }}>Strava verbinden</h3>
               <p style={{ marginBottom: 'var(--sp-5)', fontSize: '0.9rem' }}>
-                Connect your Strava account to analyse your runs and get a scientific marathon pace prediction — powered by your real heart rate and pace data.
+                Verbinde dein Strava-Konto um deine Läufe zu analysieren und eine wissenschaftliche Marathonprognose zu erhalten — basierend auf deinen echten Herzfrequenz- und Pace-Daten.
               </p>
               <button
                 style={{
@@ -204,7 +204,7 @@ export default function FitnessTab({ user, profile, onProfileUpdate, onRunsUpdat
                 }}
                 onClick={handleConnectStrava}
               >
-                Connect with Strava
+                Mit Strava verbinden
               </button>
             </div>
           ) : (
@@ -216,10 +216,10 @@ export default function FitnessTab({ user, profile, onProfileUpdate, onRunsUpdat
               }}>
                 <div style={{ width: 10, height: 10, borderRadius: '50%', background: '#FC4C02', flexShrink: 0 }} />
                 <div style={{ flex: 1 }}>
-                  <div style={{ fontWeight: 600, fontSize: 14, color: 'var(--c-text)' }}>Strava Connected</div>
+                  <div style={{ fontWeight: 600, fontSize: 14, color: 'var(--c-text)' }}>Strava verbunden</div>
                   {lastSync && (
                     <div style={{ fontSize: 12, color: 'var(--c-text-3)' }}>
-                      Last sync: {new Date(lastSync).toLocaleDateString('de-AT', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
+                      Letzter Sync: {new Date(lastSync).toLocaleDateString('de-AT', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
                     </div>
                   )}
                 </div>
@@ -229,8 +229,8 @@ export default function FitnessTab({ user, profile, onProfileUpdate, onRunsUpdat
               {runs.length === 0 ? (
                 <div className="empty-state">
                   <div className="empty-state-icon">🏃</div>
-                  <h3>No runs yet</h3>
-                  <p>Press Sync to load your Strava runs.</p>
+                  <h3>Noch keine Läufe</h3>
+                  <p>Tippe Sync um deine Strava-Läufe zu laden.</p>
                 </div>
               ) : (
                 <>
@@ -359,7 +359,7 @@ export default function FitnessTab({ user, profile, onProfileUpdate, onRunsUpdat
                       </div>
                       <div>
                         <div style={{ fontWeight: 600, color: 'var(--c-text)' }}>
-                          Aerobic Efficiency {trend >= 0 ? '+' : ''}{trend}%
+                          Aerobe Effizienz {trend >= 0 ? '+' : ''}{trend}%
                         </div>
                         <div style={{ fontSize: 13, color: 'var(--c-text-2)' }}>
                           {trend >= 2 ? 'Klare Verbesserung — du wirst fitter!' :
@@ -495,6 +495,12 @@ export default function FitnessTab({ user, profile, onProfileUpdate, onRunsUpdat
                     )
                   })()}
 
+                  {/* Training Load Card */}
+                  <TrainingLoadCard mileage={mileage} />
+
+                  {/* Personal Records */}
+                  <PersonalRecordsCard runs={runs} />
+
                   {/* Recent runs */}
                   <div>
                     <h3 style={{ fontSize: '1rem', marginBottom: 12 }}>Letzte Läufe</h3>
@@ -534,6 +540,140 @@ export default function FitnessTab({ user, profile, onProfileUpdate, onRunsUpdat
             </>
           )}
         </div>
+      </div>
+    </div>
+  )
+}
+
+// ── Training Load Card ─────────────────────────────────────────────────────────
+function TrainingLoadCard({ mileage }) {
+  const breakdown = mileage.weeklyBreakdown || []
+  if (breakdown.length < 5) return null
+
+  const thisWeekKm  = breakdown[breakdown.length - 1]?.km || 0
+  // Previous 4 completed weeks (exclude current)
+  const prev4 = breakdown.slice(-5, -1)
+  const prev4avg = prev4.reduce((s, w) => s + w.km, 0) / 4
+
+  if (prev4avg === 0 || thisWeekKm === 0) return null
+
+  const changePct = Math.round(((thisWeekKm - prev4avg) / prev4avg) * 100)
+
+  const { color, bg, icon, label, hint } =
+    changePct > 20 ? {
+      color: '#ef4444', bg: '#fef2f2', icon: '⚠️',
+      label: `+${changePct}% — Achtung!`,
+      hint: 'Mehr als 20% über dem Schnitt. Verletzungsrisiko erhöht — morgen besser einen Ruhetag einplanen.',
+    } : changePct > 10 ? {
+      color: '#f97316', bg: '#fff7ed', icon: '📊',
+      label: `+${changePct}% — erhöht`,
+      hint: 'Leicht über dem empfohlenen Aufbautempo (10%-Regel). Auf Erholung achten.',
+    } : changePct < -15 ? {
+      color: '#4a9eff', bg: '#eff6ff', icon: '💤',
+      label: `${changePct}% — Erholungswoche`,
+      hint: 'Deutlich weniger als sonst — perfekt für eine Regenerationswoche.',
+    } : {
+      color: '#22c55e', bg: '#f0fdf4', icon: '✅',
+      label: changePct >= 0 ? `+${changePct}% — gesund` : `${changePct}% — gesund`,
+      hint: 'Belastung im optimalen Bereich. Weiter so!',
+    }
+
+  return (
+    <div style={{
+      background: 'var(--c-card)', border: `1px solid ${color}44`,
+      borderRadius: 14, overflow: 'hidden',
+    }}>
+      <div style={{ padding: '10px 16px 8px', borderBottom: '1px solid var(--c-border)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--c-text-3)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+          ⚡ Trainingsbelastung
+        </div>
+        <div style={{ fontSize: 11, fontWeight: 700, color }}>
+          {icon} {label}
+        </div>
+      </div>
+      <div style={{ padding: '12px 16px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 20, marginBottom: 10 }}>
+          <div style={{ textAlign: 'center' }}>
+            <div style={{ fontSize: 22, fontWeight: 800, color, lineHeight: 1 }}>{thisWeekKm}</div>
+            <div style={{ fontSize: 11, color: 'var(--c-text-3)', marginTop: 2 }}>Diese Woche (km)</div>
+          </div>
+          <div style={{ flex: 1, height: 8, borderRadius: 999, background: 'var(--c-border)', overflow: 'hidden' }}>
+            <div style={{
+              height: '100%', borderRadius: 999, background: color,
+              width: `${Math.min(100, Math.max(5, (thisWeekKm / Math.max(prev4avg * 1.3, thisWeekKm)) * 100))}%`,
+              transition: 'width 0.5s ease',
+            }} />
+          </div>
+          <div style={{ textAlign: 'center' }}>
+            <div style={{ fontSize: 22, fontWeight: 800, color: 'var(--c-text-3)', lineHeight: 1 }}>{Math.round(prev4avg * 10) / 10}</div>
+            <div style={{ fontSize: 11, color: 'var(--c-text-3)', marginTop: 2 }}>Ø 4 Wochen</div>
+          </div>
+        </div>
+        <p style={{ fontSize: 12, color: 'var(--c-text-2)', margin: 0, lineHeight: 1.5 }}>{hint}</p>
+      </div>
+    </div>
+  )
+}
+
+// ── Personal Records Card ──────────────────────────────────────────────────────
+function PersonalRecordsCard({ runs }) {
+  if (!runs || runs.length < 3) return null
+
+  const longestRun = runs.reduce((best, r) =>
+    r.distance > (best?.distance || 0) ? r : best, null)
+  const fastestPaceRun = runs.filter(r => r.average_speed && r.distance > 5000).reduce((best, r) =>
+    r.average_speed > (best?.average_speed || 0) ? r : best, null)
+  const peakWeekKm = (() => {
+    const byWeek = {}
+    for (const r of runs) {
+      const d = new Date(r.start_date)
+      d.setDate(d.getDate() - d.getDay())
+      const k = d.toISOString().split('T')[0]
+      byWeek[k] = (byWeek[k] || 0) + r.distance / 1000
+    }
+    return Math.max(...Object.values(byWeek), 0)
+  })()
+
+  const fmt = (sec) => `${Math.floor(sec / 60)}:${String(Math.round(sec % 60)).padStart(2, '0')}`
+
+  const records = [
+    longestRun && {
+      icon: '🛣️',
+      label: 'Längster Lauf',
+      value: `${(longestRun.distance / 1000).toFixed(1)} km`,
+      sub: new Date(longestRun.start_date).toLocaleDateString('de-AT', { day: 'numeric', month: 'short', year: 'numeric' }),
+    },
+    fastestPaceRun && {
+      icon: '⚡',
+      label: 'Schnellste Pace',
+      value: `${fmt(1000 / fastestPaceRun.average_speed)} /km`,
+      sub: `${(fastestPaceRun.distance / 1000).toFixed(1)} km · ${new Date(fastestPaceRun.start_date).toLocaleDateString('de-AT', { day: 'numeric', month: 'short' })}`,
+    },
+    peakWeekKm > 0 && {
+      icon: '📅',
+      label: 'Beste Woche',
+      value: `${Math.round(peakWeekKm * 10) / 10} km`,
+      sub: 'Höchste Wochenkilometer',
+    },
+  ].filter(Boolean)
+
+  if (records.length === 0) return null
+
+  return (
+    <div>
+      <h3 style={{ fontSize: '1rem', marginBottom: 12 }}>🏆 Persönliche Bestleistungen</h3>
+      <div style={{ display: 'flex', gap: 8 }}>
+        {records.map(r => (
+          <div key={r.label} style={{
+            flex: 1, background: 'var(--c-card)', border: '1px solid var(--c-border)',
+            borderRadius: 12, padding: '12px 10px', textAlign: 'center',
+          }}>
+            <div style={{ fontSize: 20, marginBottom: 4 }}>{r.icon}</div>
+            <div style={{ fontSize: 15, fontWeight: 800, color: 'var(--c-primary)', lineHeight: 1.1, marginBottom: 3 }}>{r.value}</div>
+            <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--c-text-3)', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: 2 }}>{r.label}</div>
+            <div style={{ fontSize: 10, color: 'var(--c-text-3)' }}>{r.sub}</div>
+          </div>
+        ))}
       </div>
     </div>
   )

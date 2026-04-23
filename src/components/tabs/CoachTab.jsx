@@ -1,10 +1,11 @@
-import { useState, useRef, useEffect } from 'react'
+import { useState, useRef, useEffect, useMemo } from 'react'
 import { supabase } from '../../supabase'
 import { formatPace, getCurrentPlanPosition, daysUntilMarathon } from '../../utils/planUtils'
 import {
   deriveMaxHR, calculateVO2max, predictMarathonPaceFromVO2max,
   formatPaceSec, formatMarathonTime, vo2maxCategory, weeklyMileageStats,
 } from '../../utils/fitnessUtils'
+import { getTodayBuildEntry } from '../../utils/buildPhaseUtils'
 
 export default function CoachTab({ user, profile, trainingPlan, workoutLogs, chatMessages, onMessagesUpdate }) {
   const [input, setInput] = useState('')
@@ -15,6 +16,17 @@ export default function CoachTab({ user, profile, trainingPlan, workoutLogs, cha
   const messagesEndRef = useRef(null)
   const inputRef = useRef(null)
   const abortRef = useRef(null)
+
+  // Today's planned workout — for contextual suggestions
+  const todayPlan = useMemo(() => {
+    try { return getTodayBuildEntry(profile, workoutLogs) } catch { return null }
+  }, [profile, workoutLogs])
+  const todayType = todayPlan?.entry?.type
+
+  // Last workout's RPE for context
+  const lastLog = useMemo(() =>
+    [...workoutLogs].sort((a, b) => new Date(b.workout_date) - new Date(a.workout_date))[0],
+  [workoutLogs])
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -268,22 +280,59 @@ COACHING-RICHTLINIEN:
       <div className="screen-scroll" style={{ padding: 'var(--sp-4)' }}>
         {chatMessages.length === 0 && !showStreaming ? (
           <div style={{ padding: 'var(--sp-8) var(--sp-4)', display: 'flex', flexDirection: 'column', gap: 'var(--sp-4)' }}>
-            <div style={{ textAlign: 'center', marginBottom: 'var(--sp-4)' }}>
+            <div style={{ textAlign: 'center', marginBottom: 'var(--sp-2)' }}>
               <div style={{ fontSize: '2rem', marginBottom: 'var(--sp-3)' }}>🤖</div>
               <h3>Dein KI-Marathoncoach</h3>
               <p style={{ fontSize: '0.875rem', marginTop: 'var(--sp-2)', color: 'var(--c-text-2)' }}>
                 Ich kenne deinen Trainingsplan, deine Läufe und deine Fitness. Frag mich alles.
               </p>
             </div>
+
+            {/* Contextual hint based on today's plan or last workout */}
+            {(todayType && todayType !== 'rest' && todayType !== 'blocked') && (
+              <div style={{
+                background: 'var(--c-primary-dim)', border: '1px solid var(--c-primary)',
+                borderRadius: 12, padding: '12px 14px',
+                display: 'flex', alignItems: 'center', gap: 10,
+              }}>
+                <span style={{ fontSize: 20 }}>
+                  {{ easy: '🏃', tempo: '⚡', long: '🛣️', interval: '🔥', recovery: '🌿' }[todayType] || '🏃'}
+                </span>
+                <div>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--c-primary)' }}>Heute im Plan</div>
+                  <div style={{ fontSize: 13, color: 'var(--c-text-2)' }}>
+                    {{ easy: 'Easy Lauf', tempo: 'Tempo Lauf', long: 'Langer Lauf', interval: 'Intervalle', recovery: 'Erholungslauf' }[todayType] || todayType}
+                  </div>
+                </div>
+              </div>
+            )}
+            {lastLog?.rpe === 3 && (
+              <div style={{
+                background: '#fff7ed', border: '1px solid #f97316',
+                borderRadius: 12, padding: '10px 14px',
+                display: 'flex', alignItems: 'center', gap: 10,
+              }}>
+                <span style={{ fontSize: 18 }}>😮‍💨</span>
+                <div style={{ fontSize: 13, color: '#9a3412' }}>
+                  Letztes Training war sehr hart — frag nach Erholung
+                </div>
+              </div>
+            )}
+
             <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-2)' }}>
               {[
+                // Contextual first suggestions based on today's plan
+                ...(todayType === 'long' ? ['Wie laufe ich meinen langen Lauf richtig?'] : []),
+                ...(todayType === 'tempo' ? ['Welches Tempo soll ich beim Tempodauerlauf laufen?'] : []),
+                ...(todayType === 'interval' ? ['Wie mache ich Intervalltraining richtig?'] : []),
+                ...(lastLog?.rpe === 3 ? ['Ich war zuletzt sehr erschöpft — was empfiehlst du?'] : []),
+                // Always-visible suggestions
                 'Wie läuft mein Training gerade?',
                 'Was soll ich diese Woche beachten?',
-                'Wie laufe ich meinen langen Lauf richtig?',
                 'Ich bin müde — soll ich das Training heute auslassen?',
                 'Was ist mein realistisches Marathonziel?',
                 'Wie vermeide ich einen Einbruch beim Marathon?',
-              ].map(p => (
+              ].slice(0, 6).map(p => (
                 <button
                   key={p}
                   onClick={() => { setInput(p); inputRef.current?.focus() }}
