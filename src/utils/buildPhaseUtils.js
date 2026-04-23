@@ -13,18 +13,68 @@ export const HARDNESS = {
 }
 export const isHard = t => (HARDNESS[t] || 0) >= 2
 
-/** Running-only workout type templates per training day count */
-export function getWeeklyTypes(count) {
-  const t = {
-    1: ['long'],
-    2: ['easy', 'long'],
-    3: ['easy', 'tempo', 'long'],
-    4: ['easy', 'easy', 'tempo', 'long'],
-    5: ['easy', 'easy', 'tempo', 'easy', 'long'],
-    6: ['easy', 'easy', 'tempo', 'easy', 'recovery', 'long'],
-    7: ['easy', 'easy', 'tempo', 'easy', 'recovery', 'easy', 'long'],
+/**
+ * Personalized weekly workout type templates based on session count AND level.
+ *
+ * Beginner:    Mostly easy runs, no intervals. Build aerobic base first.
+ * Intermediate: Add tempo when count ≥ 3. Intervals only at 5+ sessions.
+ * Advanced:    Tempo + intervals earlier, more variety.
+ *
+ * @param {number} count - sessions per week (1–7)
+ * @param {string} level - 'beginner' | 'intermediate' | 'advanced'
+ * @param {number} recentFatigue - avg RPE of last 4 logs (1–3), null if unknown
+ */
+export function getWeeklyTypes(count, level = 'intermediate', recentFatigue = null) {
+  const n = Math.min(Math.max(count, 1), 7)
+
+  // If athlete is fatigued (avg RPE ≥ 2.5), swap hardest session for recovery
+  const fatigued = recentFatigue !== null && recentFatigue >= 2.5
+
+  const templates = {
+    beginner: {
+      1: ['long'],
+      2: ['easy', 'long'],
+      3: ['easy', 'easy', 'long'],
+      4: ['easy', 'easy', 'easy', 'long'],
+      5: ['easy', 'easy', 'easy', 'recovery', 'long'],
+      6: ['easy', 'easy', 'easy', 'tempo', 'recovery', 'long'],
+      7: ['easy', 'easy', 'easy', 'tempo', 'recovery', 'easy', 'long'],
+    },
+    intermediate: {
+      1: ['long'],
+      2: ['easy', 'long'],
+      3: ['easy', 'tempo', 'long'],
+      4: ['easy', 'easy', 'tempo', 'long'],
+      5: ['easy', 'easy', 'tempo', 'recovery', 'long'],
+      6: ['easy', 'easy', 'tempo', 'interval', 'recovery', 'long'],
+      7: ['easy', 'easy', 'tempo', 'interval', 'recovery', 'easy', 'long'],
+    },
+    advanced: {
+      1: ['long'],
+      2: ['tempo', 'long'],
+      3: ['easy', 'tempo', 'long'],
+      4: ['easy', 'tempo', 'interval', 'long'],
+      5: ['easy', 'easy', 'tempo', 'interval', 'long'],
+      6: ['easy', 'easy', 'tempo', 'interval', 'recovery', 'long'],
+      7: ['easy', 'easy', 'tempo', 'interval', 'easy', 'recovery', 'long'],
+    },
   }
-  return t[Math.min(Math.max(count, 1), 7)] || t[4]
+
+  const levelKey = ['beginner', 'intermediate', 'advanced'].includes(level) ? level : 'intermediate'
+  let types = templates[levelKey][n] || templates.intermediate[n]
+
+  // Fatigue override: replace hardest non-long session with recovery
+  if (fatigued) {
+    const hardIdx = [...types].map((t, i) => ({ t, i }))
+      .filter(({ t }) => t !== 'long' && t !== 'recovery' && t !== 'easy')
+      .sort((a, b) => (HARDNESS[b.t] || 0) - (HARDNESS[a.t] || 0))[0]
+    if (hardIdx) {
+      types = [...types]
+      types[hardIdx.i] = 'recovery'
+    }
+  }
+
+  return types
 }
 
 /**
@@ -65,20 +115,30 @@ export function smartPlace(types, days, existingSchedule = {}, prevWeekLastType 
 }
 
 /** Build base weekly schedule from profile preferences (running only) */
-export function buildBaseSchedule(profile) {
+/**
+ * Build base weekly schedule — personalized by level and recent fatigue.
+ * @param {object} profile
+ * @param {Array}  workoutLogs - recent logs used to compute fatigue
+ */
+export function buildBaseSchedule(profile, workoutLogs = []) {
   const preferred  = [...(profile.training_days || [])].sort()
   const blocked    = profile.blocked_days || []
   const activeDays = preferred.filter(d => !blocked.includes(d))
 
-  // sessions_per_week = desired workout count (separate from available days).
-  // Falls back to activeDays.length only for old profiles without the field.
-  // Never schedule more sessions than there are available days.
-  const sessionCount = Math.min(
-    profile.sessions_per_week ?? activeDays.length,
-    activeDays.length
-  )
+  const desiredSessions = profile.sessions_per_week && profile.sessions_per_week > 0
+    ? profile.sessions_per_week
+    : activeDays.length
+  const sessionCount = Math.min(desiredSessions, activeDays.length)
 
-  const types = getWeeklyTypes(Math.max(1, sessionCount))
+  // Compute recent fatigue from last 4 logs with RPE
+  const recentRpeLogs = workoutLogs.filter(l => l.rpe != null).slice(0, 4)
+  const recentFatigue = recentRpeLogs.length >= 2
+    ? recentRpeLogs.reduce((s, l) => s + l.rpe, 0) / recentRpeLogs.length
+    : null
+
+  const level = profile.level || 'intermediate'
+  const types = getWeeklyTypes(Math.max(1, sessionCount), level, recentFatigue)
+
   const base = {}
   for (let i = 0; i < 7; i++) base[i] = 'rest'
   const placed = smartPlace(types, activeDays, {})
@@ -89,8 +149,8 @@ export function buildBaseSchedule(profile) {
 /** Auto-schedulable types — running only, never cross/swim/etc */
 export const AUTO_TYPES = new Set(['easy', 'tempo', 'long', 'recovery', 'rest'])
 
-/** Load schedule from profile or rebuild if stale */
-export function initSchedule(profile) {
+/** Load schedule from profile or rebuild if stale. Pass workoutLogs for personalization. */
+export function initSchedule(profile, workoutLogs = []) {
   if (
     profile.build_phase_schedule &&
     typeof profile.build_phase_schedule === 'object' &&
@@ -100,7 +160,7 @@ export function initSchedule(profile) {
 
     // 1. All types must be valid running types
     const isClean = Object.values(stored).every(t => AUTO_TYPES.has(t))
-    if (!isClean) return buildBaseSchedule(profile)
+    if (!isClean) return buildBaseSchedule(profile, workoutLogs)
 
     const preferred = profile.training_days || []
     const blocked   = profile.blocked_days  || []
@@ -125,7 +185,7 @@ export function initSchedule(profile) {
 
     if (allOnValidDays && countMatches) return stored
   }
-  return buildBaseSchedule(profile)
+  return buildBaseSchedule(profile, workoutLogs)
 }
 
 /**
@@ -282,7 +342,7 @@ export function computeWeekDisplay(baseSchedule, weekLogs, profile, monday, prev
  * Used by BuildPhaseToday to show the structured plan for today.
  */
 export function getTodayBuildEntry(profile, workoutLogs) {
-  const schedule = initSchedule(profile)
+  const schedule = initSchedule(profile, workoutLogs)
   const today    = new Date(); today.setHours(0, 0, 0, 0)
   const monday   = getMondayOf(today)
 

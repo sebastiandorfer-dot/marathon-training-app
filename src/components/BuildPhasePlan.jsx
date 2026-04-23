@@ -195,7 +195,7 @@ export default function BuildPhasePlan({ profile, stravaRuns = [], workoutLogs =
   })
   const [milestoneEditing, setMilestoneEditing] = useState(false)
   const [weekOffset, setWeekOffset] = useState(0)
-  const [schedule, setSchedule]     = useState(() => initSchedule(profile))
+  const [schedule, setSchedule]     = useState(() => initSchedule(profile, workoutLogs))
   const [scheduleEditing, setScheduleEditing] = useState(false)
 
   // Re-initialize schedule when profile training settings change (e.g. after ProfileTab save).
@@ -204,7 +204,7 @@ export default function BuildPhasePlan({ profile, stravaRuns = [], workoutLogs =
   const trainingDaysKey = (profile.training_days || []).join(',')
   const blockedDaysKey  = (profile.blocked_days  || []).join(',')
   useEffect(() => {
-    setSchedule(initSchedule(profile))
+    setSchedule(initSchedule(profile, workoutLogs))
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [profile.schedule_since, profile.sessions_per_week, trainingDaysKey, blockedDaysKey])
   const [saving, setSaving]         = useState(false)
@@ -281,7 +281,7 @@ export default function BuildPhasePlan({ profile, stravaRuns = [], workoutLogs =
   }
 
   function cancelEdit() {
-    setSchedule(initSchedule(profile))
+    setSchedule(initSchedule(profile, workoutLogs))
     setScheduleEditing(false)
   }
 
