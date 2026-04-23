@@ -154,6 +154,78 @@ export function vo2maxCategory(vo2max) {
 }
 
 /**
+ * Get VO2max display without exposing precise number.
+ * Returns { label, range, color } — category + approximate range string.
+ */
+export function getVO2maxDisplay(vo2max) {
+  if (!vo2max) return null
+  const cat = vo2maxCategory(vo2max)
+  const rangeMap = {
+    'Elite':           '60+',
+    'Fortgeschritten': '~52–60',
+    'Mittelstufe':     '~44–52',
+    'Einsteiger':      '~36–44',
+    'Anfänger':        '<36',
+  }
+  return { ...cat, range: rangeMap[cat.label] }
+}
+
+/**
+ * Get marathon time as a range with confidence level.
+ * Primary source: VO2max estimate.
+ * Narrows as logged long runs (≥15 km) accumulate.
+ *
+ * Returns { minTime, maxTime, midTime, confidence, note }
+ */
+export function getMarathonTimeRange(vo2max, workoutLogs = []) {
+  if (!vo2max) return null
+  const basePaceSec = predictMarathonPaceFromVO2max(vo2max)
+  if (!basePaceSec) return null
+
+  // Find best qualifying long runs (≥15 km with duration)
+  const longRuns = [...workoutLogs]
+    .filter(l => l.distance_km >= 15 && l.duration_min)
+    .sort((a, b) => new Date(b.workout_date) - new Date(a.workout_date))
+    .slice(0, 5)
+
+  if (longRuns.length >= 3) {
+    // Average pace from actual long runs
+    const avgPaceSec = longRuns.reduce((s, l) =>
+      s + (l.duration_min * 60) / l.distance_km, 0) / longRuns.length
+    // Blend: 40% VO2max model, 60% actual data
+    const blendedPace = basePaceSec * 0.4 + avgPaceSec * 0.6
+    const confidence = longRuns.length >= 5 ? 'high' : 'medium'
+    const rangePaceW = confidence === 'high' ? 8 : 15 // ±sec per km
+
+    return {
+      minTime:    formatMarathonTime(blendedPace - rangePaceW),
+      maxTime:    formatMarathonTime(blendedPace + rangePaceW),
+      midTime:    formatMarathonTime(blendedPace),
+      minPace:    formatPaceSec(blendedPace - rangePaceW),
+      maxPace:    formatPaceSec(blendedPace + rangePaceW),
+      midPace:    formatPaceSec(blendedPace),
+      confidence,
+      note: `${longRuns.length} lange Läufe + VO₂max`,
+    }
+  }
+
+  // Only VO2max — wide range (±20 sec/km)
+  const rangePaceW = 20
+  return {
+    minTime: formatMarathonTime(basePaceSec - rangePaceW),
+    maxTime: formatMarathonTime(basePaceSec + rangePaceW),
+    midTime: formatMarathonTime(basePaceSec),
+    minPace: formatPaceSec(basePaceSec - rangePaceW),
+    maxPace: formatPaceSec(basePaceSec + rangePaceW),
+    midPace: formatPaceSec(basePaceSec),
+    confidence: 'low',
+    note: longRuns.length === 0
+      ? 'Logge lange Läufe ≥15 km für bessere Genauigkeit'
+      : `${longRuns.length} langer Lauf — mehr Daten nötig`,
+  }
+}
+
+/**
  * Weekly aerobic pace trend from Strava runs (last 8 weeks).
  * Returns array of { week: 'YYYY-MM-DD', pace: secPerKm|null }
  *

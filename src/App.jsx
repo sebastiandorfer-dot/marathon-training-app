@@ -1,7 +1,8 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { supabase } from './supabase'
 import { generateTrainingPlan, getTotalPlanWeeks } from './utils/planUtils'
 import { deriveMaxHR, calculateVO2max, predictMarathonPaceFromVO2max } from './utils/fitnessUtils'
+import { shouldRegeneratePlan, generateAIPlan } from './utils/aiPlanService'
 
 import PWAInstallBanner from './components/PWAInstallBanner'
 import Auth from './components/Auth'
@@ -31,6 +32,11 @@ export default function App() {
 
   const [generateError, setGenerateError] = useState('')
   const [onboardingData, setOnboardingData] = useState(null)
+
+  // AI-generated adaptive plan
+  const [aiPlan, setAiPlan] = useState(null)
+  const [aiPlanGenerating, setAiPlanGenerating] = useState(false)
+  const aiPlanRef = useRef(null) // avoid stale closures in callbacks
 
   // ── Boot: check auth session + Strava OAuth callback ─────────
   useEffect(() => {
@@ -122,6 +128,24 @@ export default function App() {
       if (logsRes.data) setWorkoutLogs(logsRes.data)
       if (chatRes.data) setChatMessages(chatRes.data)
       if (runsRes.data) setStravaRuns(runsRes.data)
+
+      // Generate initial AI plan in the background (non-blocking)
+      const apiKey = import.meta.env.VITE_ANTHROPIC_API_KEY
+      const logs = logsRes.data || []
+      const runs = runsRes.data || []
+      if (apiKey && profileData) {
+        const { should } = shouldRegeneratePlan(null, logs, null, profileData)
+        if (should) {
+          setAiPlanGenerating(true)
+          generateAIPlan(profileData, logs, runs, apiKey)
+            .then(plan => {
+              setAiPlan(plan)
+              aiPlanRef.current = plan
+            })
+            .catch(err => console.warn('Initial AI plan failed:', err))
+            .finally(() => setAiPlanGenerating(false))
+        }
+      }
 
       setView('app')
     } catch (err) {
@@ -242,22 +266,41 @@ export default function App() {
   }, [completedWorkoutIds, user])
 
   // ── Add / update workout log ───────────────────────────────────
-  // Called both when a new log is created AND when an existing log is
-  // updated (e.g. RPE added via the post-log modal). We upsert by ID
-  // so an RPE update doesn't create a duplicate entry in state.
+  // Upsert by ID so an RPE update doesn't duplicate. After each upsert,
+  // check if the AI plan needs regeneration (significant changes only).
   const handleLogAdded = useCallback((newLog) => {
     setWorkoutLogs(prev => {
       const idx = prev.findIndex(l => l.id === newLog.id)
+      let updated
       if (idx >= 0) {
-        // Replace the existing entry in-place
-        const updated = [...prev]
+        updated = [...prev]
         updated[idx] = newLog
-        return updated
+      } else {
+        updated = [newLog, ...prev]
       }
-      // New log — prepend and keep sorted desc by date
-      return [newLog, ...prev]
+
+      // Check if AI plan needs regeneration (async, non-blocking)
+      const apiKey = import.meta.env.VITE_ANTHROPIC_API_KEY
+      if (apiKey) {
+        const { should, reason } = shouldRegeneratePlan(
+          newLog, updated, aiPlanRef.current, profile
+        )
+        if (should) {
+          setAiPlanGenerating(true)
+          generateAIPlan(profile, updated, stravaRuns, apiKey)
+            .then(plan => {
+              const enriched = { ...plan, lastChangeReason: reason }
+              setAiPlan(enriched)
+              aiPlanRef.current = enriched
+            })
+            .catch(err => console.warn('AI plan generation failed:', err))
+            .finally(() => setAiPlanGenerating(false))
+        }
+      }
+
+      return updated
     })
-  }, [])
+  }, [profile, stravaRuns])
 
   // ── Delete workout log ─────────────────────────────────────────
   const handleLogDeleted = useCallback(async (logId) => {
@@ -373,6 +416,8 @@ export default function App() {
               onLogDeleted={handleLogDeleted}
               stravaRuns={stravaRuns}
               onConfirmRacePlan={handleConfirmRacePlan}
+              aiPlan={aiPlan}
+              aiPlanGenerating={aiPlanGenerating}
             />
           )}
           {activeTab === 'plan' && (
@@ -394,6 +439,7 @@ export default function App() {
               workoutLogs={workoutLogs}
               chatMessages={chatMessages}
               onMessagesUpdate={handleMessagesUpdate}
+              aiPlan={aiPlan}
             />
           )}
           {activeTab === 'fitness' && (

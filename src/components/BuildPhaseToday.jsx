@@ -6,6 +6,7 @@ import {
   formatPaceSec, formatMarathonTime, vo2maxCategory,
 } from '../utils/fitnessUtils'
 import { getTodayBuildEntry } from '../utils/buildPhaseUtils'
+import { getTodayAISession, detectPause, getPaceConfidence } from '../utils/aiPlanService'
 
 const TYPE_META = {
   easy:     { label: 'Easy Lauf',    color: 'var(--c-easy)',     icon: '🏃', desc: 'Locker und entspannt, Herzfrequenz niedrig halten.' },
@@ -42,6 +43,7 @@ const WORKOUT_TYPES = [
 
 export default function BuildPhaseToday({
   user, profile, stravaRuns = [], workoutLogs = [], onLogAdded, onConfirmRacePlan,
+  aiPlan = null, aiPlanGenerating = false,
 }) {
   const trainingMode     = profile.training_mode || 'race'
   const hasMarathon      = !!profile.marathon_date
@@ -70,6 +72,11 @@ export default function BuildPhaseToday({
   const todayEntry = todayPlan.entry
   const isRestDay  = !todayEntry || todayEntry.type === 'rest' || todayEntry.type === 'blocked'
   const alreadyLogged = todayEntry?.logged
+
+  // AI plan — today's session and confidence
+  const aiSession    = useMemo(() => getTodayAISession(aiPlan), [aiPlan])
+  const paceConf     = useMemo(() => getPaceConfidence(workoutLogs, stravaRuns), [workoutLogs, stravaRuns])
+  const { hasPause, pauseDays } = useMemo(() => detectPause(workoutLogs, profile.sessions_per_week || 3), [workoutLogs, profile.sessions_per_week])
 
   // Log form — pre-fill with today's planned type
   const [logOpen, setLogOpen]     = useState(false)
@@ -214,7 +221,12 @@ Antworte mit einem JSON-Objekt:
 
   const planMeta    = todayEntry ? (TYPE_META[todayEntry.type] || TYPE_META.rest) : TYPE_META.rest
   const recMeta     = recommendation ? (TYPE_META[recommendation.type] || TYPE_META.easy) : null
-  const workoutHint = (!isRestDay && todayEntry) ? getWorkoutHints(todayEntry.type, profile) : null
+  // Use AI session hint if available, fall back to static calculation
+  const workoutHint = (!isRestDay && todayEntry)
+    ? (aiSession
+        ? getAIWorkoutHint(aiSession, paceConf)
+        : getWorkoutHints(todayEntry.type, profile))
+    : null
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-5)' }}>
@@ -235,6 +247,39 @@ Antworte mit einem JSON-Objekt:
             style={{ width: '100%', padding: '13px 0', borderRadius: 12, background: 'var(--c-primary)', color: '#fff', border: 'none', fontWeight: 700, fontSize: 15, cursor: 'pointer', fontFamily: 'var(--font)' }}>
             Rennplan jetzt starten →
           </button>
+        </div>
+      )}
+
+      {/* AI plan generating indicator */}
+      {aiPlanGenerating && (
+        <div style={{
+          background: 'var(--c-primary-dim)', border: '1px solid var(--c-primary)',
+          borderRadius: 12, padding: '10px 16px',
+          display: 'flex', alignItems: 'center', gap: 10,
+        }}>
+          <div className="spinner" style={{ width: 16, height: 16, borderWidth: 2 }} />
+          <span style={{ fontSize: 13, color: 'var(--c-primary)', fontWeight: 600 }}>
+            Plan wird angepasst…
+          </span>
+        </div>
+      )}
+
+      {/* Pause detection card */}
+      {hasPause && pauseDays >= 5 && !aiPlanGenerating && (
+        <div style={{
+          background: '#eff6ff', border: '1.5px solid #4a9eff',
+          borderRadius: 12, padding: '12px 16px',
+          display: 'flex', alignItems: 'flex-start', gap: 12,
+        }}>
+          <span style={{ fontSize: 22, flexShrink: 0, marginTop: 2 }}>🔄</span>
+          <div>
+            <div style={{ fontWeight: 700, fontSize: 14, color: '#1d4ed8' }}>
+              Willkommen zurück! ({pauseDays} Tage Pause)
+            </div>
+            <div style={{ fontSize: 13, color: '#1e40af', marginTop: 3, lineHeight: 1.4 }}>
+              Dein Plan wurde angepasst — sanfterer Wiedereinstieg. Überspringe keine Erholungseinheiten.
+            </div>
+          </div>
         </div>
       )}
 
@@ -323,6 +368,11 @@ Antworte mit einem JSON-Objekt:
                   {workoutHint.tip && (
                     <div style={{ width: '100%', fontSize: 12, color: 'var(--c-text-3)', fontStyle: 'italic', paddingLeft: 2 }}>
                       💡 {workoutHint.tip}
+                    </div>
+                  )}
+                  {workoutHint.confidenceNote && (
+                    <div style={{ width: '100%', fontSize: 11, color: 'var(--c-text-3)', padding: '4px 8px', background: 'var(--c-card-hover)', borderRadius: 6 }}>
+                      📊 {workoutHint.confidenceNote}
                     </div>
                   )}
                 </div>
@@ -531,7 +581,24 @@ Antworte mit einem JSON-Objekt:
   )
 }
 
-// ── Workout Hints ─────────────────────────────────────────────────────────────
+// ── AI Workout Hint — built from AI plan session ───────────────────────────────
+function getAIWorkoutHint(aiSession, paceConf) {
+  if (!aiSession) return null
+  return {
+    pace: aiSession.pace || null,
+    duration: aiSession.duration_min ? `${aiSession.duration_min} min` : null,
+    structure: aiSession.structure || null,
+    tip: aiSession.tip || null,
+    // Show data confidence notice when pace is a rough estimate
+    confidenceNote: paceConf.level === 'none' || paceConf.level === 'low'
+      ? `Pace-Schätzung (${paceConf.dataPoints} Datenpunkte — logge mehr Einheiten für präzisere Vorgaben)`
+      : paceConf.level === 'medium'
+        ? `Basierend auf ${paceConf.dataPoints} Trainings`
+        : null,
+  }
+}
+
+// ── Static Workout Hints (fallback when no AI plan) ───────────────────────────
 function getWorkoutHints(type, profile) {
   const targetMin = parseInt(profile.target_pace_min) || 5
   const targetSec = parseInt(profile.target_pace_sec) || 0

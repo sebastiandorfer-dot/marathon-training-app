@@ -4,8 +4,10 @@ import { getStravaAuthUrl, fetchAllStravaRuns, getValidToken } from '../../utils
 import {
   deriveMaxHR, calculateVO2max, predictMarathonPaceFromVO2max,
   formatPaceSec, formatMarathonTime, calculateFitnessTrend,
-  vo2maxCategory, weeklyMileageStats, computePaceTrend,
+  vo2maxCategory, getVO2maxDisplay, getMarathonTimeRange,
+  weeklyMileageStats, computePaceTrend,
 } from '../../utils/fitnessUtils'
+import { weeklyLoadStats } from '../../utils/aiPlanService'
 import { daysUntilMarathon } from '../../utils/planUtils'
 
 export default function FitnessTab({ user, profile, onProfileUpdate, onRunsUpdate, workoutLogs = [] }) {
@@ -36,7 +38,10 @@ export default function FitnessTab({ user, profile, onProfileUpdate, onRunsUpdat
   const trend = calculateFitnessTrend(runs)
   const mileage = weeklyMileageStats(runs)
   const category = vo2max ? vo2maxCategory(vo2max) : null
+  const vo2maxDisplay = vo2max ? getVO2maxDisplay(vo2max) : null
+  const marathonRange = useMemo(() => getMarathonTimeRange(vo2max, workoutLogs), [vo2max, workoutLogs])
   const paceTrend = useMemo(() => computePaceTrend(runs, maxHR), [runs, maxHR])
+  const loadHistory = useMemo(() => weeklyLoadStats(workoutLogs), [workoutLogs])
 
   // ── Streak: consecutive calendar weeks with ≥1 logged workout ──
   const streak = useMemo(() => {
@@ -245,41 +250,65 @@ export default function FitnessTab({ user, profile, onProfileUpdate, onRunsUpdat
                       🎯 Marathon Prediction
                     </div>
 
-                    {vo2max ? (
+                    {marathonRange ? (
                       <>
-                        <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 4 }}>
-                          <div style={{ fontSize: 40, fontWeight: 800, color: 'var(--c-text)', lineHeight: 1 }}>
-                            {formatMarathonTime(predictedPaceSec)}
+                        {/* Time range — main display */}
+                        <div style={{ marginBottom: 6 }}>
+                          <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
+                            <div style={{ fontSize: 36, fontWeight: 800, color: 'var(--c-text)', lineHeight: 1 }}>
+                              {marathonRange.midTime}
+                            </div>
+                            <div style={{ fontSize: 14, color: 'var(--c-text-3)', fontWeight: 500 }}>
+                              ±{marathonRange.confidence === 'high' ? '5' : marathonRange.confidence === 'medium' ? '15' : '20'} sek/km
+                            </div>
                           </div>
-                        </div>
-                        <div style={{ fontSize: 14, color: 'var(--c-text-2)', marginBottom: 20 }}>
-                          Predicted finish · {formatPaceSec(predictedPaceSec)} min/km
+                          <div style={{ fontSize: 13, color: 'var(--c-text-3)', marginTop: 4 }}>
+                            Bereich: {marathonRange.minTime} – {marathonRange.maxTime}
+                          </div>
                         </div>
 
-                        <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap' }}>
-                          <div>
-                            <div style={{ fontSize: 20, fontWeight: 700, color: category?.color }}>{Math.round(vo2max)}</div>
-                            <div style={{ fontSize: 12, color: 'var(--c-text-3)' }}>VO₂max (ml/kg/min)</div>
-                          </div>
-                          <div>
-                            <div style={{ fontSize: 20, fontWeight: 700, color: category?.color }}>{category?.label}</div>
-                            <div style={{ fontSize: 12, color: 'var(--c-text-3)' }}>Fitness Level</div>
-                          </div>
+                        {/* Confidence indicator */}
+                        <div style={{
+                          display: 'inline-flex', alignItems: 'center', gap: 6,
+                          background: marathonRange.confidence === 'high' ? 'rgba(34,197,94,0.1)' : marathonRange.confidence === 'medium' ? 'rgba(74,158,255,0.1)' : 'rgba(120,144,156,0.1)',
+                          border: `1px solid ${marathonRange.confidence === 'high' ? '#22c55e44' : marathonRange.confidence === 'medium' ? '#4a9eff44' : '#78909c44'}`,
+                          borderRadius: 8, padding: '4px 10px', marginBottom: 16, fontSize: 12,
+                        }}>
+                          <span>{marathonRange.confidence === 'high' ? '🎯' : marathonRange.confidence === 'medium' ? '📊' : '📐'}</span>
+                          <span style={{ color: 'var(--c-text-2)' }}>
+                            {marathonRange.confidence === 'high' ? 'Hohe Genauigkeit' : marathonRange.confidence === 'medium' ? 'Mittlere Genauigkeit' : 'Schätzung'} · {marathonRange.note}
+                          </span>
+                        </div>
+
+                        {/* Fitness level + HR (no raw VO2max number) */}
+                        <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+                          {vo2maxDisplay && (
+                            <div>
+                              <div style={{ fontSize: 18, fontWeight: 700, color: vo2maxDisplay.color }}>{vo2maxDisplay.label}</div>
+                              <div style={{ fontSize: 11, color: 'var(--c-text-3)' }}>Fitness Level ({vo2maxDisplay.range})</div>
+                            </div>
+                          )}
                           {maxHR && (
                             <div>
-                              <div style={{ fontSize: 20, fontWeight: 700, color: 'var(--c-text)' }}>{maxHR}</div>
-                              <div style={{ fontSize: 12, color: 'var(--c-text-3)' }}>Max HR (bpm)</div>
+                              <div style={{ fontSize: 18, fontWeight: 700, color: 'var(--c-text)' }}>{maxHR}</div>
+                              <div style={{ fontSize: 11, color: 'var(--c-text-3)' }}>Max HR (bpm)</div>
+                            </div>
+                          )}
+                          {marathonRange.midPace && (
+                            <div>
+                              <div style={{ fontSize: 18, fontWeight: 700, color: 'var(--c-text)' }}>{marathonRange.midPace}</div>
+                              <div style={{ fontSize: 11, color: 'var(--c-text-3)' }}>Pace /km</div>
                             </div>
                           )}
                         </div>
 
                         {!inRaceWindow && daysLeft !== null && (
                           <div style={{
-                            marginTop: 20, padding: '12px 16px', background: 'rgba(29,158,117,0.1)',
+                            marginTop: 16, padding: '10px 14px', background: 'rgba(29,158,117,0.1)',
                             border: '1px solid var(--c-primary)', borderRadius: 10, fontSize: 13, color: 'var(--c-text-2)',
                           }}>
-                            <strong style={{ color: 'var(--c-primary)' }}>📈 Aufbauphase</strong> — Du bist noch <strong>{daysLeft}</strong> Tage vom Rennen entfernt.
-                            In {daysLeft - 126} Tagen startet dein 18-Wochen-Marathonplan. Bis dahin: Fitness aufbauen, Pace verbessern.
+                            <strong style={{ color: 'var(--c-primary)' }}>📈 Aufbauphase</strong> — Noch {daysLeft} Tage bis zum Rennen.
+                            In {daysLeft - 126} Tagen startet dein 18-Wochen-Plan.
                           </div>
                         )}
                       </>
@@ -496,7 +525,7 @@ export default function FitnessTab({ user, profile, onProfileUpdate, onRunsUpdat
                   })()}
 
                   {/* Training Load Card */}
-                  <TrainingLoadCard mileage={mileage} />
+                  <TrainingLoadCard mileage={mileage} loadHistory={loadHistory} />
 
                   {/* Personal Records */}
                   <PersonalRecordsCard runs={runs} />
@@ -546,48 +575,54 @@ export default function FitnessTab({ user, profile, onProfileUpdate, onRunsUpdat
 }
 
 // ── Training Load Card ─────────────────────────────────────────────────────────
-function TrainingLoadCard({ mileage }) {
+// Uses weighted training load (km × intensity) instead of raw km.
+// Qualitative assessment based on load trend, not just volume.
+function TrainingLoadCard({ mileage, loadHistory = [] }) {
   const breakdown = mileage.weeklyBreakdown || []
-  if (breakdown.length < 5) return null
+  if (breakdown.length < 5 || loadHistory.length < 5) return null
 
-  const thisWeekKm  = breakdown[breakdown.length - 1]?.km || 0
-  // Previous 4 completed weeks (exclude current)
-  const prev4 = breakdown.slice(-5, -1)
-  const prev4avg = prev4.reduce((s, w) => s + w.km, 0) / 4
+  const thisWeekKm   = breakdown[breakdown.length - 1]?.km || 0
+  const thisWeekLoad = loadHistory[loadHistory.length - 1]?.load || 0
 
-  if (prev4avg === 0 || thisWeekKm === 0) return null
+  // Previous 4 completed weeks
+  const prev4Loads = loadHistory.slice(-5, -1).filter(w => w.load > 0)
+  const prev4KmArr = breakdown.slice(-5, -1)
 
-  // How far through the week are we? (0=Mon, 6=Sun)
-  const dayOfWeek = new Date().getDay() === 0 ? 6 : new Date().getDay() - 1
-  const weekProgress = (dayOfWeek + 1) / 7 // fraction of week elapsed
-  const weekInProgress = dayOfWeek < 6 // not yet Sunday
+  if (prev4Loads.length < 2 || thisWeekLoad === 0) return null
 
-  const changePct = Math.round(((thisWeekKm - prev4avg) / prev4avg) * 100)
+  const prev4avgLoad = prev4Loads.reduce((s, w) => s + w.load, 0) / prev4Loads.length
+  const prev4avgKm   = prev4KmArr.reduce((s, w) => s + w.km, 0) / 4
 
-  const { color, bg, icon, label, hint } =
-    changePct > 20 ? {
-      color: '#ef4444', bg: '#fef2f2', icon: '⚠️',
-      label: `+${changePct}% — Achtung!`,
-      hint: 'Mehr als 20% über dem Schnitt. Verletzungsrisiko erhöht — morgen besser einen Ruhetag einplanen.',
-    } : changePct > 10 ? {
-      color: '#f97316', bg: '#fff7ed', icon: '📊',
-      label: `+${changePct}% — erhöht`,
-      hint: 'Leicht über dem empfohlenen Aufbautempo (10%-Regel). Auf Erholung achten.',
-    } : changePct < -15 ? {
-      color: '#4a9eff', bg: '#eff6ff', icon: '💤',
-      label: `${changePct}% — Erholungswoche`,
-      hint: 'Deutlich weniger als sonst — perfekt für eine Regenerationswoche.',
+  // How far through the week are we?
+  const dayOfWeek    = new Date().getDay() === 0 ? 6 : new Date().getDay() - 1
+  const weekProgress = (dayOfWeek + 1) / 7
+  const weekInProgress = dayOfWeek < 6
+
+  const loadChangePct = Math.round(((thisWeekLoad - prev4avgLoad) / prev4avgLoad) * 100)
+  const kmChangePct   = Math.round(((thisWeekKm   - prev4avgKm)   / Math.max(prev4avgKm, 1)) * 100)
+
+  // Qualitative assessment based on weighted load
+  const { color, icon, label, hint } =
+    loadChangePct > 25 ? {
+      color: '#ef4444', icon: '⚠️',
+      label: `+${loadChangePct}% Last — Achtung`,
+      hint: `Deine Intensität ist diese Woche stark erhöht. Das Verletzungsrisiko steigt — plane morgen bewusst leichter.`,
+    } : loadChangePct > 12 ? {
+      color: '#f97316', icon: '📊',
+      label: `+${loadChangePct}% Last — erhöht`,
+      hint: `Etwas intensiver als gewohnt. Achte auf guten Schlaf und Ernährung.`,
+    } : loadChangePct < -20 ? {
+      color: '#4a9eff', icon: '💤',
+      label: `${loadChangePct}% Last — Erholungswoche`,
+      hint: `Deutlich weniger Belastung als sonst — perfekte Regenerationswoche. Lass die Muskeln sich erholen.`,
     } : {
-      color: '#22c55e', bg: '#f0fdf4', icon: '✅',
-      label: changePct >= 0 ? `+${changePct}% — gesund` : `${changePct}% — gesund`,
-      hint: 'Belastung im optimalen Bereich. Weiter so!',
+      color: '#22c55e', icon: '✅',
+      label: loadChangePct >= 0 ? `+${loadChangePct}% Last — gut` : `${loadChangePct}% Last — ausgewogen`,
+      hint: `Deine Belastung ist im optimalen Bereich. Intensität und Volumen passen zusammen — weiter so!`,
     }
 
   return (
-    <div style={{
-      background: 'var(--c-card)', border: `1px solid ${color}44`,
-      borderRadius: 14, overflow: 'hidden',
-    }}>
+    <div style={{ background: 'var(--c-card)', border: `1px solid ${color}44`, borderRadius: 14, overflow: 'hidden' }}>
       <div style={{ padding: '10px 16px 8px', borderBottom: '1px solid var(--c-border)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
         <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--c-text-3)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
           ⚡ Trainingsbelastung
@@ -597,26 +632,35 @@ function TrainingLoadCard({ mileage }) {
         </div>
       </div>
       <div style={{ padding: '12px 16px' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 20, marginBottom: 10 }}>
-          <div style={{ textAlign: 'center' }}>
-            <div style={{ fontSize: 22, fontWeight: 800, color, lineHeight: 1 }}>{thisWeekKm}</div>
-            <div style={{ fontSize: 11, color: 'var(--c-text-3)', marginTop: 2 }}>Diese Woche (km)</div>
+        {/* Weighted load comparison */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginBottom: 10 }}>
+          <div style={{ textAlign: 'center', minWidth: 64 }}>
+            <div style={{ fontSize: 22, fontWeight: 800, color, lineHeight: 1 }}>{thisWeekLoad.toFixed(1)}</div>
+            <div style={{ fontSize: 10, color: 'var(--c-text-3)', marginTop: 2 }}>Diese Woche</div>
+            <div style={{ fontSize: 10, color: 'var(--c-text-3)' }}>{thisWeekKm} km</div>
           </div>
           <div style={{ flex: 1, height: 8, borderRadius: 999, background: 'var(--c-border)', overflow: 'hidden' }}>
             <div style={{
               height: '100%', borderRadius: 999, background: color,
-              width: `${Math.min(100, Math.max(5, (thisWeekKm / Math.max(prev4avg * 1.3, thisWeekKm)) * 100))}%`,
+              width: `${Math.min(100, Math.max(5, (thisWeekLoad / Math.max(prev4avgLoad * 1.35, thisWeekLoad)) * 100))}%`,
               transition: 'width 0.5s ease',
             }} />
           </div>
-          <div style={{ textAlign: 'center' }}>
-            <div style={{ fontSize: 22, fontWeight: 800, color: 'var(--c-text-3)', lineHeight: 1 }}>{Math.round(prev4avg * 10) / 10}</div>
-            <div style={{ fontSize: 11, color: 'var(--c-text-3)', marginTop: 2 }}>Ø 4 Wochen</div>
+          <div style={{ textAlign: 'center', minWidth: 64 }}>
+            <div style={{ fontSize: 22, fontWeight: 800, color: 'var(--c-text-3)', lineHeight: 1 }}>{prev4avgLoad.toFixed(1)}</div>
+            <div style={{ fontSize: 10, color: 'var(--c-text-3)', marginTop: 2 }}>Ø 4 Wochen</div>
+            <div style={{ fontSize: 10, color: 'var(--c-text-3)' }}>{Math.round(prev4avgKm * 10) / 10} km</div>
           </div>
         </div>
+
         <p style={{ fontSize: 12, color: 'var(--c-text-2)', margin: 0, lineHeight: 1.5 }}>{hint}</p>
+
+        <div style={{ marginTop: 8, fontSize: 11, color: 'var(--c-text-3)', display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+          <span>Last = km × Intensität (Easy ×1, Tempo ×1.5, Intervall ×2)</span>
+        </div>
+
         {weekInProgress && (
-          <p style={{ fontSize: 11, color: 'var(--c-text-3)', margin: '6px 0 0', fontStyle: 'italic' }}>
+          <p style={{ fontSize: 11, color: 'var(--c-text-3)', margin: '4px 0 0', fontStyle: 'italic' }}>
             Woche noch nicht abgeschlossen ({Math.round(weekProgress * 100)}% der Woche vorbei)
           </p>
         )}

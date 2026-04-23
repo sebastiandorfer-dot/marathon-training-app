@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useEffect } from 'react'
 import { supabase } from '../../supabase'
 import {
   getCurrentPlanPosition,
@@ -47,7 +47,7 @@ const TYPE_ICONS = {
 
 function todayStr() { return new Date().toISOString().split('T')[0] }
 
-export default function TodayTab({ user, profile, trainingPlan, completedWorkoutIds, onToggleComplete, workoutLogs, onLogAdded, onLogDeleted, stravaRuns = [], onConfirmRacePlan }) {
+export default function TodayTab({ user, profile, trainingPlan, completedWorkoutIds, onToggleComplete, workoutLogs, onLogAdded, onLogDeleted, stravaRuns = [], onConfirmRacePlan, aiPlan = null, aiPlanGenerating = false }) {
   const trainingMode = profile.training_mode || 'race'
   const hasMarathon = !!profile.marathon_date
 
@@ -179,6 +179,11 @@ export default function TodayTab({ user, profile, trainingPlan, completedWorkout
       <div className="screen-scroll">
         <div className="screen-content" style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-5)' }}>
 
+          {/* TRACKING MODE — passive AI observer */}
+          {trainingMode === 'tracking' && workoutLogs.length >= 3 && (
+            <TrackingObserverCard workoutLogs={workoutLogs} profile={profile} />
+          )}
+
           {/* AUFBAUPHASE */}
           {buildPhase ? (
             <BuildPhaseToday
@@ -188,6 +193,8 @@ export default function TodayTab({ user, profile, trainingPlan, completedWorkout
               workoutLogs={workoutLogs}
               onLogAdded={onLogAdded}
               onConfirmRacePlan={onConfirmRacePlan}
+              aiPlan={aiPlan}
+              aiPlanGenerating={aiPlanGenerating}
             />
           ) : (<>
 
@@ -605,6 +612,95 @@ function WeeklySummaryCard({ workoutLogs, profile }) {
           <div style={{ flex: 1, textAlign: 'center' }}>
             <div style={{ fontSize: 22, lineHeight: 1 }}>{rpeEmoji}</div>
             <div style={{ fontSize: 11, color: 'var(--c-text-3)', marginTop: 2 }}>Ø Anstrengung</div>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ── Tracking Observer Card ─────────────────────────────────────────────────────
+// Passive AI coach for tracking mode: observes patterns and gives insights.
+function TrackingObserverCard({ workoutLogs, profile }) {
+  const [insight, setInsight]     = useState(null)
+  const [loading, setLoading]     = useState(false)
+  const [lastLogCount, setLastLogCount] = useState(0)
+
+  const shouldRefresh = workoutLogs.length !== lastLogCount
+
+  useEffect(() => {
+    if (!shouldRefresh && insight) return
+    const apiKey = import.meta.env.VITE_ANTHROPIC_API_KEY
+    if (!apiKey || workoutLogs.length < 3) return
+
+    setLoading(true)
+    const sorted = [...workoutLogs]
+      .sort((a, b) => new Date(b.workout_date) - new Date(a.workout_date))
+      .slice(0, 10)
+
+    const RPE_LABELS = { 1: 'leicht', 2: 'moderat', 3: 'sehr hart' }
+    const logsText = sorted.map(l =>
+      `${l.workout_date}: ${l.workout_type}${l.distance_km ? ` ${l.distance_km}km` : ''}${l.duration_min ? ` ${l.duration_min}min` : ''}${l.rpe ? ` (${RPE_LABELS[l.rpe]})` : ''}`
+    ).join('\n')
+
+    fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01',
+        'anthropic-dangerous-direct-browser-access': 'true',
+      },
+      body: JSON.stringify({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 200,
+        messages: [{
+          role: 'user',
+          content: `Analysiere diese Trainingseinheiten und gib eine kurze, präzise Beobachtung (1-2 Sätze, kein Smalltalk, direkt):
+
+${logsText}
+
+Level: ${profile.level || 'unbekannt'}
+
+Beobachte: Konsistenz, Volumen-Trend, Intensitätsmuster, auffällige Muster.
+Antworte mit JSON: {"observation": "...", "emoji": "📈|📉|⚡|💤|🔥|✅"}`,
+        }],
+      }),
+    })
+    .then(r => r.json())
+    .then(data => {
+      const text = data.content?.[0]?.text || ''
+      const match = text.match(/\{[\s\S]*\}/)
+      if (match) {
+        const parsed = JSON.parse(match[0])
+        setInsight(parsed)
+        setLastLogCount(workoutLogs.length)
+      }
+    })
+    .catch(() => {})
+    .finally(() => setLoading(false))
+  }, [workoutLogs.length, shouldRefresh])
+
+  if (!insight && !loading) return null
+
+  return (
+    <div style={{
+      background: 'var(--c-card)', border: '1px solid var(--c-border)',
+      borderRadius: 12, padding: '12px 16px',
+      display: 'flex', alignItems: 'flex-start', gap: 12,
+    }}>
+      <span style={{ fontSize: 22, flexShrink: 0 }}>
+        {loading ? '🤖' : insight?.emoji || '📊'}
+      </span>
+      <div style={{ flex: 1 }}>
+        <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--c-text-3)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 4 }}>
+          Coach beobachtet
+        </div>
+        {loading ? (
+          <div style={{ fontSize: 13, color: 'var(--c-text-3)' }}>Analysiere dein Training…</div>
+        ) : (
+          <div style={{ fontSize: 13, color: 'var(--c-text-2)', lineHeight: 1.5 }}>
+            {insight?.observation}
           </div>
         )}
       </div>

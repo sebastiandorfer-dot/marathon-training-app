@@ -7,7 +7,7 @@ import {
 } from '../../utils/fitnessUtils'
 import { getTodayBuildEntry } from '../../utils/buildPhaseUtils'
 
-export default function CoachTab({ user, profile, trainingPlan, workoutLogs, chatMessages, onMessagesUpdate }) {
+export default function CoachTab({ user, profile, trainingPlan, workoutLogs, chatMessages, onMessagesUpdate, aiPlan = null }) {
   const [input, setInput] = useState('')
   const [streaming, setStreaming] = useState(false)
   const [error, setError] = useState('')
@@ -27,6 +27,42 @@ export default function CoachTab({ user, profile, trainingPlan, workoutLogs, cha
   const lastLog = useMemo(() =>
     [...workoutLogs].sort((a, b) => new Date(b.workout_date) - new Date(a.workout_date))[0],
   [workoutLogs])
+
+  // Proactive coach triggers
+  const proactiveAlerts = useMemo(() => {
+    const alerts = []
+    const sorted = [...workoutLogs].sort((a, b) => new Date(b.workout_date) - new Date(a.workout_date))
+
+    // RPE=3 streak (2+ hard sessions in a row)
+    const recentRpes = sorted.slice(0, 3).filter(l => l.rpe != null).map(l => l.rpe)
+    if (recentRpes.length >= 2 && recentRpes.slice(0, 2).every(r => r === 3)) {
+      alerts.push({ type: 'fatigue', icon: '😮‍💨', text: '2+ harte Einheiten hintereinander — Erholungsplanung wichtig' })
+    }
+
+    // Missed sessions (gap > 5 days without log)
+    if (sorted.length > 0) {
+      const lastDate = new Date(sorted[0].workout_date)
+      const daysSince = Math.floor((Date.now() - lastDate.getTime()) / (1000*60*60*24))
+      if (daysSince > 5) {
+        alerts.push({ type: 'pause', icon: '🔄', text: `${daysSince} Tage ohne Einheit — Wiedereinstieg besprechen?` })
+      }
+    }
+
+    // Race approaching (<21 days)
+    if (profile.marathon_date) {
+      const daysLeft = Math.ceil((new Date(profile.marathon_date) - new Date()) / (1000*60*60*24))
+      if (daysLeft > 0 && daysLeft <= 21) {
+        alerts.push({ type: 'race', icon: '🏁', text: `Noch ${daysLeft} Tage bis zum Rennen — Tapering-Fragen?` })
+      }
+    }
+
+    // AI plan changed
+    if (aiPlan?.lastChangeReason) {
+      alerts.push({ type: 'planChange', icon: '🔀', text: `Plan angepasst: ${aiPlan.lastChangeReason}` })
+    }
+
+    return alerts
+  }, [workoutLogs, profile.marathon_date, aiPlan])
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -94,6 +130,21 @@ FITNESS-DATEN (aus Strava, ${stravaRuns.length} Läufe analysiert):
 
     const modeLabel = trainingMode === 'fitness' ? 'Fitness-Modus (kein Zielrennen)' : trainingMode === 'tracking' ? 'Tracking-Modus (eigener Plan)' : 'Marathon-Modus'
 
+    // AI plan context
+    let aiPlanSection = ''
+    if (aiPlan) {
+      aiPlanSection = `
+KI-TRAININGSPLAN (aktuell):
+- Wochenthema: ${aiPlan.weekTheme || '—'}
+- Planänderung: ${aiPlan.lastChangeReason || aiPlan.changeReason || '—'}
+- Belastungseinschätzung: ${aiPlan.loadAssessment || '—'}
+- Heutige Empfehlung: ${aiPlan.sessions?.find(s => {
+        const dow = new Date().getDay() === 0 ? 6 : new Date().getDay() - 1
+        return s.dayOfWeek === dow && !s.isNextWeek
+      })?.title || 'keine spezifische Einheit heute'}
+`
+    }
+
     return `Du bist ein erfahrener Lauftrainer-KI. Du kennst den Athleten sehr gut und hast Zugriff auf alle seine Trainingsdaten. Antworte immer auf Deutsch, direkt und motivierend.
 
 ATHLETENPROFIL:
@@ -112,7 +163,7 @@ ${fitnessSection}
 
 LETZTE TRAININGSEINHEITEN (aus App):
 ${recentLogs || 'Noch keine Einheiten eingetragen'}
-
+${aiPlanSection}
 COACHING-RICHTLINIEN:
 - Antworte immer auf Deutsch
 - Sei direkt, konkret und motivierend — verwende echte Daten aus dem Profil
@@ -288,8 +339,41 @@ COACHING-RICHTLINIEN:
               </p>
             </div>
 
-            {/* Contextual hint based on today's plan or last workout */}
-            {(todayType && todayType !== 'rest' && todayType !== 'blocked') && (
+            {/* Proactive alerts — shown prominently */}
+            {proactiveAlerts.length > 0 && proactiveAlerts.map((alert, i) => (
+              <div key={i} style={{
+                background: alert.type === 'planChange' ? 'var(--c-primary-dim)' :
+                             alert.type === 'fatigue'    ? '#fff7ed' :
+                             alert.type === 'race'       ? 'rgba(199,125,255,0.08)' : '#eff6ff',
+                border: `1px solid ${
+                  alert.type === 'planChange' ? 'var(--c-primary)' :
+                  alert.type === 'fatigue'    ? '#f97316' :
+                  alert.type === 'race'       ? '#c77dff' : '#4a9eff'
+                }`,
+                borderRadius: 12, padding: '11px 14px',
+                display: 'flex', alignItems: 'center', gap: 10,
+                cursor: 'pointer',
+              }}
+              onClick={() => {
+                const questions = {
+                  fatigue:    'Ich war zuletzt sehr erschöpft — was empfiehlst du?',
+                  pause:      'Ich war eine Weile weg — wie steige ich am besten wieder ein?',
+                  race:       'Wie bereite ich mich auf mein Rennen vor?',
+                  planChange: `Warum wurde mein Plan angepasst? ${aiPlan?.lastChangeReason || ''}`,
+                }
+                setInput(questions[alert.type] || alert.text)
+                inputRef.current?.focus()
+              }}>
+                <span style={{ fontSize: 20 }}>{alert.icon}</span>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 13, color: 'var(--c-text-2)', lineHeight: 1.4 }}>{alert.text}</div>
+                  <div style={{ fontSize: 11, color: 'var(--c-text-3)', marginTop: 2 }}>Tippe um zu fragen →</div>
+                </div>
+              </div>
+            ))}
+
+            {/* Contextual hint based on today's plan */}
+            {proactiveAlerts.length === 0 && (todayType && todayType !== 'rest' && todayType !== 'blocked') && (
               <div style={{
                 background: 'var(--c-primary-dim)', border: '1px solid var(--c-primary)',
                 borderRadius: 12, padding: '12px 14px',
@@ -306,18 +390,6 @@ COACHING-RICHTLINIEN:
                 </div>
               </div>
             )}
-            {lastLog?.rpe === 3 && (
-              <div style={{
-                background: '#fff7ed', border: '1px solid #f97316',
-                borderRadius: 12, padding: '10px 14px',
-                display: 'flex', alignItems: 'center', gap: 10,
-              }}>
-                <span style={{ fontSize: 18 }}>😮‍💨</span>
-                <div style={{ fontSize: 13, color: '#9a3412' }}>
-                  Letztes Training war sehr hart — frag nach Erholung
-                </div>
-              </div>
-            )}
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-2)' }}>
               {[
@@ -326,6 +398,7 @@ COACHING-RICHTLINIEN:
                 ...(todayType === 'tempo' ? ['Welches Tempo soll ich beim Tempodauerlauf laufen?'] : []),
                 ...(todayType === 'interval' ? ['Wie mache ich Intervalltraining richtig?'] : []),
                 ...(lastLog?.rpe === 3 ? ['Ich war zuletzt sehr erschöpft — was empfiehlst du?'] : []),
+                ...(aiPlan?.lastChangeReason ? [`Warum wurde mein Plan angepasst?`] : []),
                 // Always-visible suggestions
                 'Wie läuft mein Training gerade?',
                 'Was soll ich diese Woche beachten?',
