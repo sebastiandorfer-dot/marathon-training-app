@@ -36,7 +36,7 @@ export default function FitnessTab({ user, profile, onProfileUpdate, onRunsUpdat
   const trend = calculateFitnessTrend(runs)
   const mileage = weeklyMileageStats(runs)
   const category = vo2max ? vo2maxCategory(vo2max) : null
-  const paceTrend = useMemo(() => computePaceTrend(runs), [runs])
+  const paceTrend = useMemo(() => computePaceTrend(runs, maxHR), [runs, maxHR])
 
   // ── Streak: consecutive calendar weeks with ≥1 logged workout ──
   const streak = useMemo(() => {

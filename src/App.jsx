@@ -241,9 +241,22 @@ export default function App() {
     }
   }, [completedWorkoutIds, user])
 
-  // ── Add workout log ────────────────────────────────────────────
+  // ── Add / update workout log ───────────────────────────────────
+  // Called both when a new log is created AND when an existing log is
+  // updated (e.g. RPE added via the post-log modal). We upsert by ID
+  // so an RPE update doesn't create a duplicate entry in state.
   const handleLogAdded = useCallback((newLog) => {
-    setWorkoutLogs(prev => [newLog, ...prev])
+    setWorkoutLogs(prev => {
+      const idx = prev.findIndex(l => l.id === newLog.id)
+      if (idx >= 0) {
+        // Replace the existing entry in-place
+        const updated = [...prev]
+        updated[idx] = newLog
+        return updated
+      }
+      // New log — prepend and keep sorted desc by date
+      return [newLog, ...prev]
+    })
   }, [])
 
   // ── Delete workout log ─────────────────────────────────────────

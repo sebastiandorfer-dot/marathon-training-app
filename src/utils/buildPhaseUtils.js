@@ -130,8 +130,13 @@ export function buildBaseSchedule(profile, workoutLogs = []) {
     : activeDays.length
   const sessionCount = Math.min(desiredSessions, activeDays.length)
 
-  // Compute recent fatigue from last 4 logs with RPE
-  const recentRpeLogs = workoutLogs.filter(l => l.rpe != null).slice(0, 4)
+  // Compute recent fatigue from last 4 logs with RPE.
+  // Sort explicitly by date desc so the result doesn't depend on
+  // the caller's array order (which can change after in-place RPE updates).
+  const recentRpeLogs = [...workoutLogs]
+    .filter(l => l.rpe != null)
+    .sort((a, b) => new Date(b.workout_date) - new Date(a.workout_date))
+    .slice(0, 4)
   const recentFatigue = recentRpeLogs.length >= 2
     ? recentRpeLogs.reduce((s, l) => s + l.rpe, 0) / recentRpeLogs.length
     : null

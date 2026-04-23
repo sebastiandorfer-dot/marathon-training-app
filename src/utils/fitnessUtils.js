@@ -15,17 +15,28 @@ function vo2FromPace(paceSecPerKm) {
 /**
  * Estimate VO2max from a single run using HR-pace relationship
  * Formula: VO2max = VO2_at_effort / (%HRmax)
+ *
+ * Guards:
+ * - Minimum 5 km distance: short sprints give inflated aerobic estimates
+ * - HR must be between 65–98% of max (aerobic zone, exclude sprints and warmups)
+ * - Average speed must be realistic for running (>1.5 m/s = ~11 min/km)
  */
 function estimateVO2maxFromRun(run, maxHR) {
   if (!run.average_heartrate || !run.average_speed || !maxHR) return null
   if (run.average_heartrate < 110 || run.average_heartrate > maxHR) return null
 
+  // Minimum distance: 5 km. Shorter runs skew aerobic efficiency estimate.
+  if (!run.distance || run.distance < 5000) return null
+
+  // Minimum realistic running speed (slower than ~16 min/km is walking)
+  if (run.average_speed < 1.05) return null
+
   const paceSecPerKm = 1000 / run.average_speed // speed in m/s → sec/km
   const vo2AtEffort = vo2FromPace(paceSecPerKm)
   const hrFraction = run.average_heartrate / maxHR
 
-  // Only use efforts where HR > 65% of max (aerobic zone)
-  if (hrFraction < 0.65) return null
+  // Only use efforts where HR is 65–98% of max (aerobic zone)
+  if (hrFraction < 0.65 || hrFraction > 0.98) return null
 
   return vo2AtEffort / hrFraction
 }
@@ -44,22 +55,27 @@ export function deriveMaxHR(runs) {
 }
 
 /**
- * Calculate VO2max from a set of runs
- * Uses the top 20% of estimates (removes outliers)
+ * Calculate VO2max from a set of runs.
+ *
+ * Strategy: collect all valid per-run estimates (≥5 km, aerobic HR zone),
+ * then average the top third. Taking the top estimates (not all) reflects
+ * the athlete's best aerobic performances — on tired legs or easy days the
+ * estimate will naturally be lower and would drag the average down unfairly.
+ * Hard cap at 85 to reject physiologically impossible outliers.
  */
 export function calculateVO2max(runs, maxHR) {
-  if (!maxHR || runs.length < 3) return null
+  if (!maxHR || runs.length < 2) return null
 
   const estimates = runs
     .map(run => estimateVO2maxFromRun(run, maxHR))
-    .filter(v => v !== null && v > 20 && v < 90)
+    .filter(v => v !== null && v > 25 && v < 85)
     .sort((a, b) => b - a)
 
   if (estimates.length < 2) return null
 
-  // Take top 20% but at least 3 values
-  const topN = Math.max(3, Math.ceil(estimates.length * 0.2))
-  const top = estimates.slice(0, Math.min(topN, estimates.length))
+  // Use top third of estimates, minimum 2, maximum 10 values
+  const topN = Math.min(10, Math.max(2, Math.ceil(estimates.length / 3)))
+  const top = estimates.slice(0, topN)
   return top.reduce((a, b) => a + b, 0) / top.length
 }
 
@@ -129,24 +145,33 @@ export function calculateFitnessTrend(runs) {
 /**
  * Get fitness level description from VO2max
  */
-export function vo2maxCategory(vo2max, age = 25) {
-  // Simplified for male runners ~25 years
-  if (vo2max >= 60) return { label: 'Elite', color: '#c77dff' }
-  if (vo2max >= 52) return { label: 'Advanced', color: '#1D9E75' }
-  if (vo2max >= 44) return { label: 'Intermediate', color: '#4a9eff' }
-  if (vo2max >= 36) return { label: 'Beginner', color: '#ff8c42' }
-  return { label: 'Starter', color: '#78909c' }
+export function vo2maxCategory(vo2max) {
+  if (vo2max >= 60) return { label: 'Elite',           color: '#c77dff' }
+  if (vo2max >= 52) return { label: 'Fortgeschritten', color: '#1D9E75' }
+  if (vo2max >= 44) return { label: 'Mittelstufe',     color: '#4a9eff' }
+  if (vo2max >= 36) return { label: 'Einsteiger',      color: '#ff8c42' }
+  return                    { label: 'Anfänger',        color: '#78909c' }
 }
 
 /**
- * Weekly average pace trend from Strava runs (last 8 weeks).
+ * Weekly aerobic pace trend from Strava runs (last 8 weeks).
  * Returns array of { week: 'YYYY-MM-DD', pace: secPerKm|null }
- * Useful for drawing a pace-over-time chart.
+ *
+ * To make the trend meaningful we only use runs ≥5 km and normalize
+ * by heart rate effort: we pick the FASTEST pace among that week's
+ * qualifying runs (≥5 km, HR ≥ 60 % of maxHR if available).
+ * This captures "best aerobic performance of the week" rather than
+ * diluting the signal with very slow recovery runs.
  */
-export function computePaceTrend(runs) {
+export function computePaceTrend(runs, maxHR = null) {
   const byWeek = {}
   for (const run of runs) {
     if (!run.average_speed) continue
+    if (!run.distance || run.distance < 5000) continue // ignore short runs
+
+    // If we have HR data, skip very easy / recovery runs (HR < 60% max)
+    if (maxHR && run.average_heartrate && run.average_heartrate < maxHR * 0.60) continue
+
     const d = new Date(run.start_date)
     const sun = new Date(d); sun.setDate(d.getDate() - d.getDay())
     const key = sun.toISOString().split('T')[0]
@@ -159,9 +184,10 @@ export function computePaceTrend(runs) {
     const sun = new Date(d); sun.setDate(d.getDate() - d.getDay())
     const key = sun.toISOString().split('T')[0]
     const paces = byWeek[key]
+    // Use the fastest (lowest) pace of the week as the representative value
     result.push({
       week: key,
-      pace: paces ? Math.round(paces.reduce((s, p) => s + p, 0) / paces.length) : null,
+      pace: paces ? Math.min(...paces) : null,
     })
   }
   return result
@@ -190,16 +216,17 @@ export function weeklyMileageStats(runs) {
   const peak = Math.max(...allKm)
   const avg = allKm.reduce((a, b) => a + b, 0) / allKm.length
 
-  // Last 4 CALENDAR weeks from today (including weeks with 0 km)
+  // Last 4 COMPLETED calendar weeks (exclude the current unfinished week)
+  // Using the 4 weeks ending last Sunday so the average isn't deflated by
+  // a partially-completed current week.
   const getWeekKey = (date) => {
     const d = new Date(date)
     const weekStart = new Date(d)
     weekStart.setDate(d.getDate() - d.getDay())
     return weekStart.toISOString().split('T')[0]
   }
-  const todayKey = getWeekKey(new Date())
   const last4Keys = []
-  for (let i = 3; i >= 0; i--) {
+  for (let i = 4; i >= 1; i--) {   // i=1..4 → 4 completed weeks, NOT current (i=0)
     const d = new Date()
     d.setDate(d.getDate() - i * 7)
     last4Keys.push(getWeekKey(d))
