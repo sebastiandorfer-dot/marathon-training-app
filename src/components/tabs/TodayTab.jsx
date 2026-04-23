@@ -8,6 +8,7 @@ import {
   formatDuration,
   daysUntilMarathon,
   isInBuildPhase,
+  getMondayOf,
 } from '../../utils/planUtils'
 import BuildPhaseToday from '../BuildPhaseToday'
 
@@ -89,10 +90,25 @@ export default function TodayTab({ user, profile, trainingPlan, completedWorkout
   const [logging, setLogging] = useState(false)
   const [logError, setLogError] = useState('')
   const [logSuccess, setLogSuccess] = useState(false)
+  const [rpeLogId, setRpeLogId] = useState(null)
+  const [rpeSaving, setRpeSaving] = useState(false)
 
   const displayWorkout = todayWorkout || nextWorkout?.workout
 
   function updateLog(key, val) { setLogForm(f => ({ ...f, [key]: val })) }
+
+  async function saveRpe(rpeValue) {
+    setRpeSaving(true)
+    try {
+      const { data } = await supabase
+        .from('workout_logs').update({ rpe: rpeValue })
+        .eq('id', rpeLogId).select().single()
+      if (data) onLogAdded(data)
+    } finally {
+      setRpeSaving(false)
+      setRpeLogId(null)
+    }
+  }
 
   async function submitLog() {
     setLogError('')
@@ -116,12 +132,9 @@ export default function TodayTab({ user, profile, trainingPlan, completedWorkout
       if (error) throw error
 
       onLogAdded(data)
-      setLogSuccess(true)
-      setTimeout(() => {
-        setLogSuccess(false)
-        setLogOpen(false)
-        setLogForm({ workout_date: todayStr(), workout_type: 'easy', distance_km: '', duration_min: '', notes: '', rpe: null })
-      }, 1500)
+      setLogOpen(false)
+      setLogForm({ workout_date: todayStr(), workout_type: 'easy', distance_km: '', duration_min: '', notes: '', rpe: null })
+      if (!logForm.rpe) setRpeLogId(data.id)
     } catch (err) {
       setLogError(err.message || 'Fehler beim Speichern.')
     } finally {
@@ -150,13 +163,14 @@ export default function TodayTab({ user, profile, trainingPlan, completedWorkout
         </div>
         {daysLeft !== null && (
           <div style={{
-            background: 'var(--c-card)', border: '1px solid var(--c-border)',
-            borderRadius: 'var(--r-md)', padding: 'var(--sp-2) var(--sp-3)', textAlign: 'center',
+            background: daysLeft <= 14 ? 'var(--c-primary-dim)' : 'var(--c-card)',
+            border: `1px solid ${daysLeft <= 14 ? 'var(--c-primary)' : 'var(--c-border)'}`,
+            borderRadius: 'var(--r-md)', padding: 'var(--sp-2) var(--sp-3)', textAlign: 'center', minWidth: 60,
           }}>
-            <div style={{ fontSize: '1.25rem', fontWeight: 700, color: daysLeft <= 14 ? 'var(--c-primary)' : 'var(--c-text)' }}>
+            <div style={{ fontSize: '1.4rem', fontWeight: 800, color: daysLeft <= 14 ? 'var(--c-primary)' : 'var(--c-text)', lineHeight: 1 }}>
               {daysLeft}
             </div>
-            <div style={{ fontSize: '0.6875rem', color: 'var(--c-text-3)', fontWeight: 600, lineHeight: 1.2 }}>
+            <div style={{ fontSize: '0.6875rem', color: daysLeft <= 14 ? 'var(--c-primary)' : 'var(--c-text-3)', fontWeight: 600, lineHeight: 1.3, marginTop: 2 }}>
               Tage bis<br/>Marathon
             </div>
           </div>
@@ -373,8 +387,47 @@ export default function TodayTab({ user, profile, trainingPlan, completedWorkout
             </div>
           )}
           </>)}
+
+          {/* Weekly Summary — always visible */}
+          <WeeklySummaryCard workoutLogs={workoutLogs} profile={profile} />
+
         </div>
       </div>
+
+      {/* RPE Post-Log Modal */}
+      {rpeLogId && (
+        <div style={{
+          position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: 200,
+          background: 'var(--c-bg)', borderTop: '1.5px solid var(--c-border)',
+          borderRadius: '20px 20px 0 0',
+          padding: '20px 20px 44px',
+          display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 16,
+          boxShadow: '0 -8px 32px rgba(0,0,0,0.15)',
+        }}>
+          <div style={{ width: 36, height: 4, borderRadius: 2, background: 'var(--c-border)', marginBottom: 4 }} />
+          <div style={{ fontWeight: 700, fontSize: 18, color: 'var(--c-text)' }}>Wie war das Training? 💬</div>
+          <div style={{ display: 'flex', gap: 12, width: '100%' }}>
+            {RPE_OPTIONS.map(r => (
+              <button key={r.value} onClick={() => saveRpe(r.value)} disabled={rpeSaving}
+                style={{
+                  flex: 1, padding: '18px 8px', borderRadius: 14,
+                  border: `2px solid ${r.color}33`,
+                  background: `${r.color}11`,
+                  cursor: 'pointer', fontFamily: 'var(--font)',
+                  display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6,
+                  transition: 'all 0.15s',
+                }}>
+                <span style={{ fontSize: 30 }}>{r.emoji}</span>
+                <span style={{ fontSize: 13, fontWeight: 700, color: r.color }}>{r.label}</span>
+              </button>
+            ))}
+          </div>
+          <button onClick={() => setRpeLogId(null)}
+            style={{ background: 'none', border: 'none', color: 'var(--c-text-3)', fontSize: 14, cursor: 'pointer', fontFamily: 'var(--font)', padding: '4px 12px' }}>
+            Überspringen
+          </button>
+        </div>
+      )}
     </div>
   )
 }
@@ -453,6 +506,79 @@ function WorkoutHero({ workout, isToday, nextDate, nextWeek, isDone, onToggle })
           )}
         </button>
       )}
+    </div>
+  )
+}
+
+function WeeklySummaryCard({ workoutLogs, profile }) {
+  const today = new Date(); today.setHours(0, 0, 0, 0)
+  const monday = getMondayOf(today)
+  const mondayStr = monday.toISOString().split('T')[0]
+  const sunday = new Date(monday); sunday.setDate(monday.getDate() + 6)
+  const sundayStr = sunday.toISOString().split('T')[0]
+
+  const thisWeek = workoutLogs.filter(l => l.workout_date >= mondayStr && l.workout_date <= sundayStr)
+  const lastMonday = new Date(monday); lastMonday.setDate(monday.getDate() - 7)
+  const lastMondayStr = lastMonday.toISOString().split('T')[0]
+  const lastWeek = workoutLogs.filter(l => l.workout_date >= lastMondayStr && l.workout_date < mondayStr)
+
+  if (thisWeek.length === 0 && lastWeek.length === 0) return null
+
+  const planned = profile.sessions_per_week || 3
+  const done = thisWeek.length
+  const totalKm = Math.round(thisWeek.reduce((s, l) => s + (l.distance_km || 0), 0) * 10) / 10
+  const lastKm  = Math.round(lastWeek.reduce((s, l) => s + (l.distance_km || 0), 0) * 10) / 10
+
+  const rpeItems = thisWeek.filter(l => l.rpe != null)
+  const avgRpe = rpeItems.length > 0
+    ? rpeItems.reduce((s, l) => s + l.rpe, 0) / rpeItems.length : null
+  const rpeEmoji = avgRpe === null ? null : avgRpe < 1.5 ? '😌' : avgRpe < 2.5 ? '💪' : '🔥'
+
+  const pct = Math.min(1, done / Math.max(planned, 1))
+  const barColor = pct >= 1 ? '#22c55e' : pct >= 0.5 ? '#4a9eff' : 'var(--c-primary)'
+
+  const kmDiff = totalKm - lastKm
+  const kmTrend = lastKm === 0 ? null : kmDiff > 0 ? `+${kmDiff.toFixed(1)} km` : `${kmDiff.toFixed(1)} km`
+
+  return (
+    <div style={{
+      background: 'var(--c-card)', border: '1px solid var(--c-border)',
+      borderRadius: 14, padding: '14px 16px',
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--c-text)' }}>Diese Woche</div>
+        <div style={{ fontSize: 12, color: 'var(--c-text-3)' }}>
+          {monday.toLocaleDateString('de-AT', { day: 'numeric', month: 'short' })} – {sunday.toLocaleDateString('de-AT', { day: 'numeric', month: 'short' })}
+        </div>
+      </div>
+
+      {/* Progress bar */}
+      <div style={{ height: 6, borderRadius: 999, background: 'var(--c-border)', overflow: 'hidden', marginBottom: 10 }}>
+        <div style={{ height: '100%', width: `${pct * 100}%`, background: barColor, borderRadius: 999, transition: 'width 0.5s ease' }} />
+      </div>
+
+      <div style={{ display: 'flex', gap: 0 }}>
+        <div style={{ flex: 1, textAlign: 'center' }}>
+          <div style={{ fontSize: 20, fontWeight: 800, color: done >= planned ? '#22c55e' : 'var(--c-text)', lineHeight: 1 }}>
+            {done}<span style={{ fontSize: 13, fontWeight: 500, color: 'var(--c-text-3)' }}>/{planned}</span>
+          </div>
+          <div style={{ fontSize: 11, color: 'var(--c-text-3)', marginTop: 2 }}>Einheiten</div>
+        </div>
+        {totalKm > 0 && (
+          <div style={{ flex: 1, textAlign: 'center' }}>
+            <div style={{ fontSize: 20, fontWeight: 800, color: 'var(--c-text)', lineHeight: 1 }}>{totalKm}</div>
+            <div style={{ fontSize: 11, color: 'var(--c-text-3)', marginTop: 2 }}>
+              km {kmTrend && <span style={{ color: kmDiff > 0 ? '#22c55e' : '#ef4444' }}>({kmTrend})</span>}
+            </div>
+          </div>
+        )}
+        {rpeEmoji && (
+          <div style={{ flex: 1, textAlign: 'center' }}>
+            <div style={{ fontSize: 22, lineHeight: 1 }}>{rpeEmoji}</div>
+            <div style={{ fontSize: 11, color: 'var(--c-text-3)', marginTop: 2 }}>Anstrengung</div>
+          </div>
+        )}
+      </div>
     </div>
   )
 }

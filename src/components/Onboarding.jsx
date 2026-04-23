@@ -615,10 +615,11 @@ function ScheduleSection({ days, onToggleDay, sessions, onSessions, flexibility,
               key={i}
               className={`day-chip ${days.includes(i) ? 'selected' : ''}`}
               onClick={() => {
-                onToggleDay(i)
-                // If removing a day drops below sessions count, reduce sessions
                 const newDays = days.includes(i) ? days.filter(d => d !== i) : [...days, i]
+                onToggleDay(i)
+                // Keep sessions in sync with day count changes
                 if (newDays.length < sessions) onSessions(Math.max(1, newDays.length))
+                else if (newDays.length > days.length && sessions === days.length) onSessions(newDays.length)
               }}
             >
               {d}

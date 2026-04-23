@@ -83,6 +83,8 @@ export default function BuildPhaseToday({
   })
   const [logging, setLogging]     = useState(false)
   const [logSuccess, setLogSuccess] = useState(false)
+  const [rpeLogId, setRpeLogId]   = useState(null)
+  const [rpeSaving, setRpeSaving] = useState(false)
 
   // Keep log form type in sync with plan (on first load)
   useEffect(() => {
@@ -190,19 +192,30 @@ Antworte mit einem JSON-Objekt:
       }).select().single()
       if (error) throw error
       onLogAdded(data)
-      setLogSuccess(true)
-      setTimeout(() => {
-        setLogSuccess(false)
-        setLogOpen(false)
-        setLogForm({ workout_date: new Date().toISOString().split('T')[0], workout_type: 'easy', distance_km: '', duration_min: '', notes: '', rpe: null })
-      }, 1500)
+      setLogOpen(false)
+      setLogForm({ workout_date: new Date().toISOString().split('T')[0], workout_type: 'easy', distance_km: '', duration_min: '', notes: '', rpe: null })
+      if (!logForm.rpe) setRpeLogId(data.id)
     } catch { /* ignore */ } finally {
       setLogging(false)
     }
   }
 
-  const planMeta = todayEntry ? (TYPE_META[todayEntry.type] || TYPE_META.rest) : TYPE_META.rest
-  const recMeta  = recommendation ? (TYPE_META[recommendation.type] || TYPE_META.easy) : null
+  async function saveRpe(rpeValue) {
+    setRpeSaving(true)
+    try {
+      const { data } = await supabase
+        .from('workout_logs').update({ rpe: rpeValue })
+        .eq('id', rpeLogId).select().single()
+      if (data) onLogAdded(data)
+    } finally {
+      setRpeSaving(false)
+      setRpeLogId(null)
+    }
+  }
+
+  const planMeta    = todayEntry ? (TYPE_META[todayEntry.type] || TYPE_META.rest) : TYPE_META.rest
+  const recMeta     = recommendation ? (TYPE_META[recommendation.type] || TYPE_META.easy) : null
+  const workoutHint = (!isRestDay && todayEntry) ? getWorkoutHints(todayEntry.type, profile) : null
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-5)' }}>
@@ -285,6 +298,34 @@ Antworte mit einem JSON-Objekt:
                   {todayEntry.logs[0].distance_km ? `${todayEntry.logs[0].distance_km} km` : ''}
                   {todayEntry.logs[0].distance_km && todayEntry.logs[0].duration_min ? ' · ' : ''}
                   {todayEntry.logs[0].duration_min ? `${todayEntry.logs[0].duration_min} min` : ''}
+                </div>
+              )}
+              {/* Workout hints: pace, structure, tip */}
+              {!alreadyLogged && workoutHint && (
+                <div style={{ marginTop: 10, display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                  {workoutHint.pace && (
+                    <div style={{ background: planMeta.color + '15', border: `1px solid ${planMeta.color}33`, borderRadius: 8, padding: '5px 10px' }}>
+                      <div style={{ fontSize: 11, color: 'var(--c-text-3)' }}>Pace</div>
+                      <div style={{ fontSize: 13, fontWeight: 700, color: planMeta.color }}>{workoutHint.pace}</div>
+                    </div>
+                  )}
+                  {workoutHint.duration && (
+                    <div style={{ background: 'var(--c-card-hover)', border: '1px solid var(--c-border)', borderRadius: 8, padding: '5px 10px' }}>
+                      <div style={{ fontSize: 11, color: 'var(--c-text-3)' }}>Dauer</div>
+                      <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--c-text)' }}>{workoutHint.duration}</div>
+                    </div>
+                  )}
+                  {workoutHint.structure && (
+                    <div style={{ width: '100%', background: 'var(--c-card-hover)', border: '1px solid var(--c-border)', borderRadius: 8, padding: '6px 10px' }}>
+                      <div style={{ fontSize: 11, color: 'var(--c-text-3)', marginBottom: 2 }}>Aufbau</div>
+                      <div style={{ fontSize: 12, color: 'var(--c-text-2)' }}>{workoutHint.structure}</div>
+                    </div>
+                  )}
+                  {workoutHint.tip && (
+                    <div style={{ width: '100%', fontSize: 12, color: 'var(--c-text-3)', fontStyle: 'italic', paddingLeft: 2 }}>
+                      💡 {workoutHint.tip}
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -442,8 +483,90 @@ Antworte mit einem JSON-Objekt:
           </button>
         </div>
       )}
+
+      {/* RPE Post-Log Modal */}
+      {rpeLogId && (
+        <div style={{
+          position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: 200,
+          background: 'var(--c-bg)', borderTop: '1.5px solid var(--c-border)',
+          borderRadius: '20px 20px 0 0',
+          padding: '20px 20px 44px',
+          display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 16,
+          boxShadow: '0 -8px 32px rgba(0,0,0,0.15)',
+        }}>
+          <div style={{ width: 36, height: 4, borderRadius: 2, background: 'var(--c-border)', marginBottom: 4 }} />
+          <div style={{ fontWeight: 700, fontSize: 18, color: 'var(--c-text)' }}>Wie war das Training? 💬</div>
+          <div style={{ display: 'flex', gap: 12, width: '100%' }}>
+            {RPE_OPTIONS.map(r => (
+              <button key={r.value} onClick={() => saveRpe(r.value)} disabled={rpeSaving}
+                style={{
+                  flex: 1, padding: '18px 8px', borderRadius: 14,
+                  border: `2px solid ${r.color}33`,
+                  background: `${r.color}11`,
+                  cursor: 'pointer', fontFamily: 'var(--font)',
+                  display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6,
+                  transition: 'all 0.15s',
+                }}>
+                <span style={{ fontSize: 30 }}>{r.emoji}</span>
+                <span style={{ fontSize: 13, fontWeight: 700, color: r.color }}>{r.label}</span>
+              </button>
+            ))}
+          </div>
+          <button onClick={() => setRpeLogId(null)}
+            style={{ background: 'none', border: 'none', color: 'var(--c-text-3)', fontSize: 14, cursor: 'pointer', fontFamily: 'var(--font)', padding: '4px 12px' }}>
+            Überspringen
+          </button>
+        </div>
+      )}
     </div>
   )
+}
+
+// ── Workout Hints ─────────────────────────────────────────────────────────────
+function getWorkoutHints(type, profile) {
+  const targetMin = parseInt(profile.target_pace_min) || 5
+  const targetSec = parseInt(profile.target_pace_sec) || 0
+  const targetTotal = targetMin * 60 + targetSec
+
+  const fmt = (sec) => {
+    const s = Math.round(sec)
+    return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`
+  }
+
+  switch (type) {
+    case 'easy':
+      return {
+        pace: `${fmt(targetTotal + 75)}–${fmt(targetTotal + 90)} /km`,
+        duration: '40–60 min',
+        tip: 'Locker genug um sich zu unterhalten.',
+      }
+    case 'tempo':
+      return {
+        pace: `${fmt(targetTotal + 15)}–${fmt(targetTotal + 25)} /km`,
+        structure: '10 min einlaufen → 20–25 min Tempo → 10 min auslaufen',
+        tip: 'Komfortabel unangenehm — du könntest sprechen, aber lieber nicht.',
+      }
+    case 'long':
+      return {
+        pace: `${fmt(targetTotal + 60)}–${fmt(targetTotal + 75)} /km`,
+        duration: '75–120 min',
+        tip: 'Langsam genug um die ganze Zeit zu reden.',
+      }
+    case 'interval':
+      return {
+        pace: `${fmt(targetTotal - 10)}–${fmt(targetTotal + 5)} /km`,
+        structure: '10 min einlaufen → 5–6 × 1 km (90 sek Pause) → 10 min auslaufen',
+        tip: 'Jedes Intervall kontrolliert — gleichmäßiges Tempo ist wichtiger als schnell.',
+      }
+    case 'recovery':
+      return {
+        pace: `${fmt(targetTotal + 90)}–${fmt(targetTotal + 120)} /km`,
+        duration: '20–35 min',
+        tip: 'Aktive Erholung. Kein Druck — Beine lockermachen.',
+      }
+    default:
+      return null
+  }
 }
 
 // ── Pace Gap Card ──────────────────────────────────────────────────────────────
