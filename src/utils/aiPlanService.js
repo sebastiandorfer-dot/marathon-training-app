@@ -319,10 +319,10 @@ Antworte NUR mit validem JSON (kein Markdown, keine Erklärung davor/danach):
   return {
     ...plan,
     generatedAt: new Date().toISOString(),
-    confidence: getPaceConfidence,
+    confidence: confidence.level,
     pauseDetected: hasPause,
     pauseDays,
-    dataPoints: (getPaceConfidence([], []) || {}).dataPoints || 0,
+    dataPoints: confidence.dataPoints,
   }
 }
 

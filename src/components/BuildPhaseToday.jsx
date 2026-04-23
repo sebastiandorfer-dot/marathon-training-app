@@ -3,7 +3,8 @@ import { supabase } from '../supabase'
 import { daysUntilMarathon, daysUntilRacePlan } from '../utils/planUtils'
 import {
   deriveMaxHR, calculateVO2max, predictMarathonPaceFromVO2max,
-  formatPaceSec, formatMarathonTime, vo2maxCategory,
+  formatPaceSec, formatMarathonTime, vo2maxCategory, getVO2maxDisplay,
+  getMarathonTimeRange,
 } from '../utils/fitnessUtils'
 import { getTodayBuildEntry } from '../utils/buildPhaseUtils'
 import { getTodayAISession, detectPause, getPaceConfidence } from '../utils/aiPlanService'
@@ -56,6 +57,8 @@ export default function BuildPhaseToday({
   const vo2max           = calculateVO2max(stravaRuns, maxHR)
   const predictedPaceSec = predictMarathonPaceFromVO2max(vo2max)
   const category         = vo2max ? vo2maxCategory(vo2max) : null
+  const vo2maxDisp       = vo2max ? getVO2maxDisplay(vo2max) : null
+  const marathonRange    = useMemo(() => getMarathonTimeRange(vo2max, workoutLogs), [vo2max, workoutLogs])
 
   // Fatigue indicator: avg RPE of last 3–4 logged workouts (requires RPE data)
   const recentFatigue = useMemo(() => {
@@ -151,7 +154,8 @@ export default function BuildPhaseToday({
 
 Athlet: ${profile.level}, Ziel ${profile.target_pace_min}:${String(profile.target_pace_sec).padStart(2,'0')}/km
 Marathon in: ${daysLeft} Tagen (noch ${daysToRacePlan} Tage bis zum 18-Wochen-Rennplan)
-${vo2max ? `VO2max: ${Math.round(vo2max)} (${category?.label})` : 'Noch keine Fitness-Daten'}
+${vo2maxDisp ? `Fitness Level: ${vo2maxDisp.label} (${vo2maxDisp.range})` : 'Noch keine Fitness-Daten'}
+${marathonRange ? `Marathonprognose: ${marathonRange.minTime}–${marathonRange.maxTime}` : ''}
 Heute: ${today}
 ${plannedStr}
 Letzte Einheiten: ${recentLogs || 'keine'}
@@ -750,10 +754,10 @@ function PaceGapCard({ profile, predictedPaceSec, vo2max, category, daysLeft }) 
                 : `Noch ${gapSec} sek/km bis zum Ziel`}
             </div>
 
-            {/* VO2max footnote */}
-            {vo2max && (
+            {/* Fitness footnote — category only, no raw VO2max number */}
+            {vo2maxDisp && (
               <div style={{ textAlign: 'center', fontSize: 11, color: 'var(--c-text-3)', marginTop: 6 }}>
-                VO₂max {Math.round(vo2max)} ({category?.label}) · Wenn Marathon morgen wäre: {formatMarathonTime(predictedPaceSec)}
+                {vo2maxDisp.label} ({vo2maxDisp.range}) · Wenn Marathon morgen wäre: {formatMarathonTime(predictedPaceSec)}
               </div>
             )}
           </>

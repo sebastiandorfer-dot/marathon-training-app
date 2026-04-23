@@ -36,7 +36,8 @@ export default function App() {
   // AI-generated adaptive plan
   const [aiPlan, setAiPlan] = useState(null)
   const [aiPlanGenerating, setAiPlanGenerating] = useState(false)
-  const aiPlanRef = useRef(null) // avoid stale closures in callbacks
+  const aiPlanRef = useRef(null)       // mirrors aiPlan, avoids stale closures
+  const workoutLogsRef = useRef([])    // mirrors workoutLogs, for AI check after upsert
 
   // ── Boot: check auth session + Strava OAuth callback ─────────
   useEffect(() => {
@@ -125,7 +126,7 @@ export default function App() {
 
       if (planRes.data) setTrainingPlan(planRes.data)
       if (completionsRes.data) setCompletedWorkoutIds(completionsRes.data.map(c => c.workout_id))
-      if (logsRes.data) setWorkoutLogs(logsRes.data)
+      if (logsRes.data) { setWorkoutLogs(logsRes.data); workoutLogsRef.current = logsRes.data }
       if (chatRes.data) setChatMessages(chatRes.data)
       if (runsRes.data) setStravaRuns(runsRes.data)
 
@@ -139,8 +140,9 @@ export default function App() {
           setAiPlanGenerating(true)
           generateAIPlan(profileData, logs, runs, apiKey)
             .then(plan => {
-              setAiPlan(plan)
-              aiPlanRef.current = plan
+              const enriched = { ...plan, lastChangeReason: null } // initial plan — no prior change
+              setAiPlan(enriched)
+              aiPlanRef.current = enriched
             })
             .catch(err => console.warn('Initial AI plan failed:', err))
             .finally(() => setAiPlanGenerating(false))
@@ -269,37 +271,43 @@ export default function App() {
   // Upsert by ID so an RPE update doesn't duplicate. After each upsert,
   // check if the AI plan needs regeneration (significant changes only).
   const handleLogAdded = useCallback((newLog) => {
+    // 1. Upsert log in state (pure, no side effects)
     setWorkoutLogs(prev => {
       const idx = prev.findIndex(l => l.id === newLog.id)
-      let updated
+      let next
       if (idx >= 0) {
-        updated = [...prev]
-        updated[idx] = newLog
+        next = [...prev]; next[idx] = newLog
       } else {
-        updated = [newLog, ...prev]
+        next = [newLog, ...prev]
       }
-
-      // Check if AI plan needs regeneration (async, non-blocking)
-      const apiKey = import.meta.env.VITE_ANTHROPIC_API_KEY
-      if (apiKey) {
-        const { should, reason } = shouldRegeneratePlan(
-          newLog, updated, aiPlanRef.current, profile
-        )
-        if (should) {
-          setAiPlanGenerating(true)
-          generateAIPlan(profile, updated, stravaRuns, apiKey)
-            .then(plan => {
-              const enriched = { ...plan, lastChangeReason: reason }
-              setAiPlan(enriched)
-              aiPlanRef.current = enriched
-            })
-            .catch(err => console.warn('AI plan generation failed:', err))
-            .finally(() => setAiPlanGenerating(false))
-        }
-      }
-
-      return updated
+      workoutLogsRef.current = next // keep ref in sync
+      return next
     })
+
+    // 2. AI plan regeneration check — runs after state update, no setState needed
+    const apiKey = import.meta.env.VITE_ANTHROPIC_API_KEY
+    if (!apiKey) return
+
+    const updatedLogs = (() => {
+      const idx = workoutLogsRef.current.findIndex(l => l.id === newLog.id)
+      if (idx >= 0) {
+        const arr = [...workoutLogsRef.current]; arr[idx] = newLog; return arr
+      }
+      return [newLog, ...workoutLogsRef.current]
+    })()
+
+    const { should, reason } = shouldRegeneratePlan(newLog, updatedLogs, aiPlanRef.current, profile)
+    if (should) {
+      setAiPlanGenerating(true)
+      generateAIPlan(profile, updatedLogs, stravaRuns, apiKey)
+        .then(plan => {
+          const enriched = { ...plan, lastChangeReason: reason }
+          setAiPlan(enriched)
+          aiPlanRef.current = enriched
+        })
+        .catch(err => console.warn('AI plan generation failed:', err))
+        .finally(() => setAiPlanGenerating(false))
+    }
   }, [profile, stravaRuns])
 
   // ── Delete workout log ─────────────────────────────────────────

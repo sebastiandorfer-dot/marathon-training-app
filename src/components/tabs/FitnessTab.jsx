@@ -578,14 +578,27 @@ export default function FitnessTab({ user, profile, onProfileUpdate, onRunsUpdat
 // Uses weighted training load (km × intensity) instead of raw km.
 // Qualitative assessment based on load trend, not just volume.
 function TrainingLoadCard({ mileage, loadHistory = [] }) {
-  const breakdown = mileage.weeklyBreakdown || []
-  if (breakdown.length < 5 || loadHistory.length < 5) return null
+  // loadHistory is from workout logs (always available)
+  // mileage.weeklyBreakdown is from Strava runs (only when connected)
+  // Use loadHistory as primary source; fall back to mileage km for display only
+  const hasLoadData = loadHistory.length >= 5
+  const hasMileageData = (mileage.weeklyBreakdown || []).length >= 5
 
-  const thisWeekKm   = breakdown[breakdown.length - 1]?.km || 0
-  const thisWeekLoad = loadHistory[loadHistory.length - 1]?.load || 0
+  if (!hasLoadData && !hasMileageData) return null
+
+  // Prefer loadHistory; if not enough, synthesise from mileage breakdown
+  const effectiveHistory = hasLoadData
+    ? loadHistory
+    : (mileage.weeklyBreakdown || []).map(w => ({ week: w.week, rawKm: w.km, load: w.km })) // km as proxy load
+
+  if (effectiveHistory.length < 5) return null
+
+  const breakdown = mileage.weeklyBreakdown || []
+  const thisWeekKm   = breakdown.length > 0 ? (breakdown[breakdown.length - 1]?.km || 0) : 0
+  const thisWeekLoad = effectiveHistory[effectiveHistory.length - 1]?.load || 0
 
   // Previous 4 completed weeks
-  const prev4Loads = loadHistory.slice(-5, -1).filter(w => w.load > 0)
+  const prev4Loads = effectiveHistory.slice(-5, -1).filter(w => w.load > 0)
   const prev4KmArr = breakdown.slice(-5, -1)
 
   if (prev4Loads.length < 2 || thisWeekLoad === 0) return null

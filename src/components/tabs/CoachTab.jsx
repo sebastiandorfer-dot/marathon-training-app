@@ -3,7 +3,8 @@ import { supabase } from '../../supabase'
 import { formatPace, getCurrentPlanPosition, daysUntilMarathon } from '../../utils/planUtils'
 import {
   deriveMaxHR, calculateVO2max, predictMarathonPaceFromVO2max,
-  formatPaceSec, formatMarathonTime, vo2maxCategory, weeklyMileageStats,
+  formatPaceSec, formatMarathonTime, vo2maxCategory, getVO2maxDisplay,
+  getMarathonTimeRange, weeklyMileageStats,
 } from '../../utils/fitnessUtils'
 import { getTodayBuildEntry } from '../../utils/buildPhaseUtils'
 
@@ -85,17 +86,17 @@ export default function CoachTab({ user, profile, trainingPlan, workoutLogs, cha
     // Fitness data from Strava
     const maxHR = deriveMaxHR(stravaRuns)
     const vo2max = calculateVO2max(stravaRuns, maxHR)
-    const predictedPaceSec = predictMarathonPaceFromVO2max(vo2max)
-    const category = vo2max ? vo2maxCategory(vo2max) : null
+    const vo2maxDisp = vo2max ? getVO2maxDisplay(vo2max) : null
+    const marathonRange = getMarathonTimeRange(vo2max, workoutLogs)
     const mileage = weeklyMileageStats(stravaRuns)
 
     let fitnessSection = ''
     if (stravaRuns.length > 0) {
       fitnessSection = `
 FITNESS-DATEN (aus Strava, ${stravaRuns.length} Läufe analysiert):
-- VO2max (geschätzt): ${vo2max ? Math.round(vo2max) + ' ml/kg/min (' + category?.label + ')' : 'nicht genug HR-Daten'}
+- Fitness Level: ${vo2maxDisp ? vo2maxDisp.label + ' (' + vo2maxDisp.range + ')' : 'nicht genug HR-Daten'}
 - Maximale Herzfrequenz: ${maxHR ? maxHR + ' bpm' : 'nicht verfügbar'}
-- Vorhergesagte Marathonzeit: ${predictedPaceSec ? formatMarathonTime(predictedPaceSec) + ' (' + formatPaceSec(predictedPaceSec) + '/km)' : 'nicht berechenbar'}
+- Marathonprognose: ${marathonRange ? marathonRange.minTime + '–' + marathonRange.maxTime + ' (' + marathonRange.confidence + ' Konfidenz, ' + marathonRange.note + ')' : 'nicht berechenbar'}
 - Wochenkilometer Ø (letzte 4 Wochen): ${mileage.last4avg} km
 - Wochenkilometer Ø gesamt: ${mileage.avg} km
 - Peak-Woche: ${mileage.peak} km

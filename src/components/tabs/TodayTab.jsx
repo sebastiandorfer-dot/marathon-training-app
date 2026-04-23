@@ -622,18 +622,22 @@ function WeeklySummaryCard({ workoutLogs, profile }) {
 // ── Tracking Observer Card ─────────────────────────────────────────────────────
 // Passive AI coach for tracking mode: observes patterns and gives insights.
 function TrackingObserverCard({ workoutLogs, profile }) {
-  const [insight, setInsight]     = useState(null)
-  const [loading, setLoading]     = useState(false)
-  const [lastLogCount, setLastLogCount] = useState(0)
-
-  const shouldRefresh = workoutLogs.length !== lastLogCount
+  const [insight, setInsight] = useState(null)
+  const [loading, setLoading] = useState(false)
+  // Track the log count at which the last insight was generated
+  const analyzedCountRef = useRef(0)
 
   useEffect(() => {
-    if (!shouldRefresh && insight) return
-    const apiKey = import.meta.env.VITE_ANTHROPIC_API_KEY
-    if (!apiKey || workoutLogs.length < 3) return
+    // Only re-analyze when a new log is added (count increased)
+    if (workoutLogs.length < 3) return
+    if (workoutLogs.length === analyzedCountRef.current) return
 
+    const apiKey = import.meta.env.VITE_ANTHROPIC_API_KEY
+    if (!apiKey) return
+
+    analyzedCountRef.current = workoutLogs.length // mark as analyzing this count
     setLoading(true)
+
     const sorted = [...workoutLogs]
       .sort((a, b) => new Date(b.workout_date) - new Date(a.workout_date))
       .slice(0, 10)
@@ -671,15 +675,11 @@ Antworte mit JSON: {"observation": "...", "emoji": "📈|📉|⚡|💤|🔥|✅"
     .then(data => {
       const text = data.content?.[0]?.text || ''
       const match = text.match(/\{[\s\S]*\}/)
-      if (match) {
-        const parsed = JSON.parse(match[0])
-        setInsight(parsed)
-        setLastLogCount(workoutLogs.length)
-      }
+      if (match) setInsight(JSON.parse(match[0]))
     })
-    .catch(() => {})
+    .catch(() => { analyzedCountRef.current = 0 }) // reset so it retries next time
     .finally(() => setLoading(false))
-  }, [workoutLogs.length, shouldRefresh])
+  }, [workoutLogs.length]) // only re-run when count changes, not on every render
 
   if (!insight && !loading) return null
 
