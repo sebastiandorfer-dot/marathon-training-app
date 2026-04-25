@@ -531,6 +531,9 @@ export default function FitnessTab({ user, profile, onProfileUpdate, onRunsUpdat
                     )
                   })()}
 
+                  {/* Weekly km progression chart — uses workoutLogs (Strava + manual) */}
+                  <WeeklyProgressionCard workoutLogs={workoutLogs} />
+
                   {/* Training Load Card */}
                   <TrainingLoadCard mileage={mileage} loadHistory={loadHistory} />
 
@@ -584,6 +587,202 @@ export default function FitnessTab({ user, profile, onProfileUpdate, onRunsUpdat
 // ── Training Load Card ─────────────────────────────────────────────────────────
 // Uses weighted training load (km × intensity) instead of raw km.
 // Qualitative assessment based on load trend, not just volume.
+// ── Weekly Progression Chart ───────────────────────────────────────────────────
+function WeeklyProgressionCard({ workoutLogs = [] }) {
+  // Build last 12 weeks of data from workoutLogs (works without Strava)
+  const weeks = useMemo(() => {
+    const result = []
+    const today = new Date(); today.setHours(0, 0, 0, 0)
+    for (let i = 11; i >= 0; i--) {
+      const mon = new Date(today)
+      mon.setDate(today.getDate() - ((today.getDay() + 6) % 7) - i * 7)
+      mon.setHours(0, 0, 0, 0)
+      const sun = new Date(mon); sun.setDate(mon.getDate() + 6); sun.setHours(23, 59, 59, 999)
+      const monStr = mon.toISOString().split('T')[0]
+      const sunStr = sun.toISOString().split('T')[0]
+
+      const weekLogs = workoutLogs.filter(l => l.workout_date >= monStr && l.workout_date <= sunStr)
+      const km = { easy: 0, tempo: 0, long: 0, interval: 0, other: 0 }
+      let sessions = 0
+      for (const l of weekLogs) {
+        if (!l.distance_km) continue
+        const t = ['easy','tempo','long','interval'].includes(l.workout_type) ? l.workout_type : 'other'
+        km[t] += l.distance_km
+        sessions++
+      }
+      const total = km.easy + km.tempo + km.long + km.interval + km.other
+      result.push({ mon, label: mon.toLocaleDateString('de-AT', { day: 'numeric', month: 'short' }), ...km, total, sessions })
+    }
+    return result
+  }, [workoutLogs])
+
+  const maxKm = Math.max(...weeks.map(w => w.total), 1)
+  // Only show if at least 4 weeks have data
+  const activeWeeks = weeks.filter(w => w.total > 0).length
+  if (activeWeeks < 2) return null
+
+  const TYPE_COLORS = {
+    long:     'var(--c-long)',
+    interval: 'var(--c-interval, #f97316)',
+    tempo:    'var(--c-tempo)',
+    easy:     'var(--c-easy)',
+    other:    'var(--c-text-3)',
+  }
+  const TYPES = ['long', 'interval', 'tempo', 'easy', 'other']
+
+  // Chart dimensions
+  const BAR_W   = 16
+  const GAP     = 6
+  const CHART_H = 100
+  const PAD_B   = 18  // space for x-labels
+  const PAD_T   = 6
+  const PAD_L   = 30  // y-axis labels
+  const totalW  = weeks.length * (BAR_W + GAP) - GAP + PAD_L + 8
+
+  // Y-axis: round max up to nearest 5
+  const yMax = Math.ceil(maxKm / 5) * 5 || 5
+  const yOf  = (km) => PAD_T + (CHART_H - PAD_T - PAD_B) * (1 - km / yMax)
+
+  // 4-week rolling average
+  const rollingAvg = weeks.map((_, i) => {
+    const slice = weeks.slice(Math.max(0, i - 3), i + 1).filter(w => w.total > 0)
+    return slice.length ? slice.reduce((s, w) => s + w.total, 0) / slice.length : null
+  })
+
+  // Trend: is last 4 weeks average higher than previous 4?
+  const last4  = weeks.slice(-4).filter(w => w.total > 0)
+  const prev4  = weeks.slice(-8, -4).filter(w => w.total > 0)
+  const last4avg = last4.length  ? last4.reduce((s, w) => s + w.total, 0) / last4.length : 0
+  const prev4avg = prev4.length  ? prev4.reduce((s, w) => s + w.total, 0) / prev4.length : 0
+  const trendPct = prev4avg > 0 ? Math.round(((last4avg - prev4avg) / prev4avg) * 100) : null
+  const trendColor = trendPct === null ? 'var(--c-text-3)' : trendPct > 5 ? '#22c55e' : trendPct < -5 ? '#ef4444' : '#f59e0b'
+
+  const totalKmAll  = weeks.reduce((s, w) => s + w.total, 0)
+  const avgKmActive = activeWeeks > 0 ? Math.round(totalKmAll / activeWeeks) : 0
+
+  return (
+    <div style={{ background: 'var(--c-card)', border: '1px solid var(--c-border)', borderRadius: 14, overflow: 'hidden' }}>
+      {/* Header */}
+      <div style={{ padding: '10px 16px 8px', borderBottom: '1px solid var(--c-border)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--c-text-3)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+          📈 Wochenkilometer (12 Wochen)
+        </div>
+        {trendPct !== null && (
+          <div style={{ fontSize: 11, fontWeight: 700, color: trendColor }}>
+            {trendPct > 0 ? '+' : ''}{trendPct}% Trend
+          </div>
+        )}
+      </div>
+
+      <div style={{ padding: '12px 12px 8px', overflowX: 'auto' }}>
+        {/* SVG Chart */}
+        <svg viewBox={`0 0 ${totalW} ${CHART_H}`} style={{ width: '100%', minWidth: totalW, height: CHART_H, display: 'block' }}>
+          {/* Y-axis guide lines */}
+          {[0.25, 0.5, 0.75, 1].map(frac => {
+            const km = yMax * frac
+            const y  = yOf(km)
+            return (
+              <g key={frac}>
+                <line x1={PAD_L} y1={y} x2={totalW - 4} y2={y}
+                  stroke="var(--c-border)" strokeWidth="1" strokeDasharray="3,3" />
+                <text x={PAD_L - 4} y={y + 3} textAnchor="end" fontSize="7" fill="var(--c-text-3)">
+                  {Math.round(km)}
+                </text>
+              </g>
+            )
+          })}
+
+          {/* Stacked bars */}
+          {weeks.map((w, i) => {
+            const x = PAD_L + i * (BAR_W + GAP)
+            const isThisWeek = i === weeks.length - 1
+            let yBottom = yOf(0)
+            return (
+              <g key={i}>
+                {TYPES.map(t => {
+                  if (!w[t]) return null
+                  const barH = (w[t] / yMax) * (CHART_H - PAD_T - PAD_B)
+                  const y = yBottom - barH
+                  yBottom = y
+                  return (
+                    <rect key={t} x={x} y={y} width={BAR_W} height={barH}
+                      fill={TYPE_COLORS[t]} opacity={isThisWeek ? 1 : 0.75}
+                      rx={t === [...TYPES].reverse().find(tp => w[tp] > 0) ? 2 : 0}
+                    />
+                  )
+                })}
+                {/* "This week" highlight */}
+                {isThisWeek && w.total > 0 && (
+                  <rect x={x - 1} y={PAD_T} width={BAR_W + 2} height={CHART_H - PAD_T - PAD_B}
+                    fill="none" stroke="var(--c-primary)" strokeWidth="1.5" rx="3" opacity="0.5" />
+                )}
+                {/* X label — every 2nd week */}
+                {(i % 2 === 0 || i === weeks.length - 1) && (
+                  <text x={x + BAR_W / 2} y={CHART_H - 2} textAnchor="middle" fontSize="7" fill={isThisWeek ? 'var(--c-primary)' : 'var(--c-text-3)'}>
+                    {w.label}
+                  </text>
+                )}
+                {/* km label on top of bar — only if space */}
+                {w.total >= yMax * 0.15 && (
+                  <text x={x + BAR_W / 2} y={yOf(w.total) - 2} textAnchor="middle" fontSize="7" fill="var(--c-text-2)" fontWeight="700">
+                    {Math.round(w.total)}
+                  </text>
+                )}
+              </g>
+            )
+          })}
+
+          {/* Rolling average line */}
+          {(() => {
+            const pts = rollingAvg.map((avg, i) =>
+              avg !== null ? `${PAD_L + i * (BAR_W + GAP) + BAR_W / 2},${yOf(avg)}` : null
+            ).filter(Boolean)
+            if (pts.length < 3) return null
+            return (
+              <polyline points={pts.join(' ')} fill="none"
+                stroke="var(--c-primary)" strokeWidth="1.5" strokeDasharray="4,3"
+                strokeLinecap="round" opacity="0.6" />
+            )
+          })()}
+        </svg>
+      </div>
+
+      {/* Summary row */}
+      <div style={{ padding: '0 16px 12px', display: 'flex', gap: 0 }}>
+        {[
+          { label: 'Ø km/Woche',     value: `${avgKmActive} km`,    color: 'var(--c-text)'   },
+          { label: 'Aktive Wochen',  value: `${activeWeeks}/12`,     color: 'var(--c-text)'   },
+          { label: 'Gesamt (12W)',   value: `${Math.round(totalKmAll)} km`, color: 'var(--c-primary)' },
+        ].map((s, i) => (
+          <div key={i} style={{ flex: 1, textAlign: 'center', padding: '8px 0', borderRight: i < 2 ? '1px solid var(--c-border)' : 'none' }}>
+            <div style={{ fontSize: 15, fontWeight: 800, color: s.color }}>{s.value}</div>
+            <div style={{ fontSize: 10, color: 'var(--c-text-3)', marginTop: 2 }}>{s.label}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* Type legend */}
+      <div style={{ padding: '0 16px 12px', display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+        {[
+          { key: 'long',     label: 'Lang'      },
+          { key: 'interval', label: 'Intervall' },
+          { key: 'tempo',    label: 'Tempo'     },
+          { key: 'easy',     label: 'Easy'      },
+        ].filter(t => weeks.some(w => w[t.key] > 0)).map(t => (
+          <div key={t.key} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+            <div style={{ width: 10, height: 10, borderRadius: 2, background: TYPE_COLORS[t.key], flexShrink: 0 }} />
+            <span style={{ fontSize: 11, color: 'var(--c-text-3)' }}>{t.label}</span>
+          </div>
+        ))}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+          <div style={{ width: 20, height: 0, borderTop: '2px dashed var(--c-primary)', opacity: 0.6, flexShrink: 0 }} />
+          <span style={{ fontSize: 11, color: 'var(--c-text-3)' }}>4W-Schnitt</span>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function TrainingLoadCard({ mileage, loadHistory = [] }) {
   // loadHistory is from workout logs (always available)
   // mileage.weeklyBreakdown is from Strava runs (only when connected)
