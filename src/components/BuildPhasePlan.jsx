@@ -216,42 +216,13 @@ export default function BuildPhasePlan({ profile, stravaRuns = [], workoutLogs =
     return m
   }, [weekOffset])
 
+  // workoutLogs already contains merged strava runs (passed from App.jsx as allWorkoutLogs)
   const weekLogs = useMemo(() => {
     const start  = monday.toISOString().split('T')[0]
     const end    = new Date(monday); end.setDate(monday.getDate() + 6)
     const endStr = end.toISOString().split('T')[0]
-
-    const logsThisWeek = workoutLogs.filter(l => l.workout_date >= start && l.workout_date <= endStr)
-
-    // IDs already covered by workout_logs (strava-sourced entries)
-    const loggedStravaIds = new Set(
-      logsThisWeek.map(l => l.notes?.match(/strava:(\d+)/)?.[1]).filter(Boolean)
-    )
-
-    // Add strava runs not yet reflected in workout_logs
-    const stravaThisWeek = stravaRuns
-      .filter(r => {
-        const d = r.start_date.slice(0, 10)
-        return d >= start && d <= endStr && !loggedStravaIds.has(String(r.strava_id))
-      })
-      .map(r => {
-        const distKm = r.distance / 1000
-        const paceSecKm = distKm > 0 ? r.moving_time / distKm : null
-        let workout_type = 'easy'
-        if (paceSecKm && paceSecKm < 270) workout_type = 'interval'
-        else if (paceSecKm && paceSecKm < 310) workout_type = 'tempo'
-        else if (distKm >= 18) workout_type = 'long'
-        return {
-          workout_date: r.start_date.slice(0, 10),
-          distance_km:  parseFloat(distKm.toFixed(2)),
-          duration_min: Math.round(r.moving_time / 60),
-          workout_type,
-          notes: `strava:${r.strava_id}`,
-        }
-      })
-
-    return [...logsThisWeek, ...stravaThisWeek]
-  }, [workoutLogs, stravaRuns, monday])
+    return workoutLogs.filter(l => l.workout_date >= start && l.workout_date <= endStr)
+  }, [workoutLogs, monday])
 
   // Workout type of last Sunday → cross-week conflict detection
   const prevWeekLastType = useMemo(() => {

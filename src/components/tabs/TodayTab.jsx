@@ -150,25 +150,8 @@ export default function TodayTab({ user, profile, trainingPlan, completedWorkout
     }
   }
 
-  // Merge strava runs into logs for display (dedup by strava_id sentinel in notes)
-  const loggedStravaIds = new Set(
-    workoutLogs.map(l => l.notes?.match(/strava:(\d+)/)?.[1]).filter(Boolean)
-  )
-  const stravaAsLogs = stravaRuns
-    .filter(r => !loggedStravaIds.has(String(r.strava_id)))
-    .map(r => ({
-      id: `strava-${r.strava_id}`,
-      workout_date: r.start_date.slice(0, 10),
-      distance_km: parseFloat((r.distance / 1000).toFixed(2)),
-      duration_min: Math.round(r.moving_time / 60),
-      workout_type: 'easy',
-      notes: `strava:${r.strava_id}`,
-      rpe: null,
-      _fromStrava: true,
-    }))
-  const allLogs = [...workoutLogs, ...stravaAsLogs]
-
-  const recentLogs = [...allLogs]
+  // workoutLogs already contains merged strava runs (passed from App.jsx as allWorkoutLogs)
+  const recentLogs = [...workoutLogs]
     .sort((a, b) => new Date(b.workout_date) - new Date(a.workout_date))
     .slice(0, 6)
 
@@ -482,7 +465,7 @@ export default function TodayTab({ user, profile, trainingPlan, completedWorkout
           </>)}
 
           {/* Weekly Summary — always visible */}
-          <WeeklySummaryCard workoutLogs={workoutLogs} stravaRuns={stravaRuns} profile={profile} aiPlan={aiPlan} />
+          <WeeklySummaryCard workoutLogs={workoutLogs} profile={profile} aiPlan={aiPlan} />
 
         </div>
       </div>
@@ -673,35 +656,19 @@ function WorkoutHero({ workout, isToday, nextDate, nextWeek, isDone, onToggle })
   )
 }
 
-function mergeStravaIntoLogs(workoutLogs, stravaRuns, fromStr, toStr) {
-  const logs = workoutLogs.filter(l => l.workout_date >= fromStr && l.workout_date <= toStr)
-  const loggedIds = new Set(logs.map(l => l.notes?.match(/strava:(\d+)/)?.[1]).filter(Boolean))
-  const stravaExtra = (stravaRuns || [])
-    .filter(r => {
-      const d = r.start_date.slice(0, 10)
-      return d >= fromStr && d <= toStr && !loggedIds.has(String(r.strava_id))
-    })
-    .map(r => ({
-      workout_date: r.start_date.slice(0, 10),
-      distance_km: parseFloat((r.distance / 1000).toFixed(2)),
-      duration_min: Math.round(r.moving_time / 60),
-      workout_type: 'easy',
-      notes: `strava:${r.strava_id}`,
-    }))
-  return [...logs, ...stravaExtra]
-}
-
-function WeeklySummaryCard({ workoutLogs, stravaRuns = [], profile, aiPlan }) {
+function WeeklySummaryCard({ workoutLogs, profile, aiPlan }) {
+  // workoutLogs already contains merged strava runs from App.jsx
   const today = new Date(); today.setHours(0, 0, 0, 0)
   const monday = getMondayOf(today)
   const mondayStr = monday.toISOString().split('T')[0]
   const sunday = new Date(monday); sunday.setDate(monday.getDate() + 6)
   const sundayStr = sunday.toISOString().split('T')[0]
 
-  const thisWeek = mergeStravaIntoLogs(workoutLogs, stravaRuns, mondayStr, sundayStr)
+  const thisWeek = workoutLogs.filter(l => l.workout_date >= mondayStr && l.workout_date <= sundayStr)
   const lastMonday = new Date(monday); lastMonday.setDate(monday.getDate() - 7)
   const lastMondayStr = lastMonday.toISOString().split('T')[0]
-  const lastWeek = mergeStravaIntoLogs(workoutLogs, stravaRuns, lastMondayStr, new Date(monday.getTime() - 86400000).toISOString().split('T')[0])
+  const prevSundayStr = new Date(monday.getTime() - 86400000).toISOString().split('T')[0]
+  const lastWeek = workoutLogs.filter(l => l.workout_date >= lastMondayStr && l.workout_date <= prevSundayStr)
 
   // Don't show on Monday morning if nothing logged yet this week — would show 0/X confusingly
   const isMondayEmpty = today.getDay() === 1 && thisWeek.length === 0

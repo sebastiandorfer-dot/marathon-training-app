@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { supabase } from './supabase'
 import { generateTrainingPlan, getTotalPlanWeeks } from './utils/planUtils'
 import { deriveMaxHR, calculateVO2max, predictMarathonPaceFromVO2max } from './utils/fitnessUtils'
@@ -40,6 +40,35 @@ export default function App() {
   const aiPlanRef = useRef(null)       // mirrors aiPlan, avoids stale closures
   const workoutLogsRef = useRef([])    // mirrors workoutLogs, for AI check after upsert
   const [pendingStravaFeedback, setPendingStravaFeedback] = useState(null) // {log, run} awaiting RPE
+
+  // ── Merge strava runs into workout logs (single source of truth for all tabs) ──
+  const allWorkoutLogs = useMemo(() => {
+    const loggedStravaIds = new Set(
+      workoutLogs.map(l => l.notes?.match(/strava:(\d+)/)?.[1]).filter(Boolean)
+    )
+    const stravaAsLogs = stravaRuns
+      .filter(r => !loggedStravaIds.has(String(r.strava_id)))
+      .map(r => {
+        const distKm = r.distance / 1000
+        const paceSecKm = distKm > 0 ? r.moving_time / distKm : null
+        let workout_type = 'easy'
+        if (paceSecKm && paceSecKm < 270) workout_type = 'interval'
+        else if (paceSecKm && paceSecKm < 310) workout_type = 'tempo'
+        else if (distKm >= 18) workout_type = 'long'
+        return {
+          id: `strava-${r.strava_id}`,
+          workout_date: r.start_date.slice(0, 10),
+          distance_km: parseFloat(distKm.toFixed(2)),
+          duration_min: Math.round(r.moving_time / 60),
+          workout_type,
+          notes: `strava:${r.strava_id}`,
+          rpe: null,
+          _fromStrava: true,
+        }
+      })
+    return [...workoutLogs, ...stravaAsLogs]
+      .sort((a, b) => new Date(b.workout_date) - new Date(a.workout_date))
+  }, [workoutLogs, stravaRuns])
 
   // ── Boot: check auth session + Strava OAuth callback ─────────
   useEffect(() => {
@@ -685,7 +714,7 @@ export default function App() {
               trainingPlan={trainingPlan}
               completedWorkoutIds={completedWorkoutIds}
               onToggleComplete={handleToggleComplete}
-              workoutLogs={workoutLogs}
+              workoutLogs={allWorkoutLogs}
               onLogAdded={handleLogAdded}
               onLogDeleted={handleLogDeleted}
               stravaRuns={stravaRuns}
@@ -723,7 +752,7 @@ export default function App() {
               trainingPlan={trainingPlan}
               completedWorkoutIds={completedWorkoutIds}
               onToggleComplete={handleToggleComplete}
-              workoutLogs={workoutLogs}
+              workoutLogs={allWorkoutLogs}
               stravaRuns={stravaRuns}
               onTabChange={setActiveTab}
               onProfileUpdate={handleProfileUpdate}
@@ -734,7 +763,7 @@ export default function App() {
               user={user}
               profile={profile}
               trainingPlan={trainingPlan}
-              workoutLogs={workoutLogs}
+              workoutLogs={allWorkoutLogs}
               chatMessages={chatMessages}
               onMessagesUpdate={handleMessagesUpdate}
               aiPlan={aiPlan}
@@ -755,7 +784,7 @@ export default function App() {
               user={user}
               profile={profile}
               trainingPlan={trainingPlan}
-              workoutLogs={workoutLogs}
+              workoutLogs={allWorkoutLogs}
               completedWorkoutIds={completedWorkoutIds}
               stravaRuns={stravaRuns}
               onProfileUpdate={handleProfileUpdate}
