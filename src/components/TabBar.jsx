@@ -50,10 +50,13 @@ const TABS = [
   },
 ]
 
-export default function TabBar({ activeTab, onTabChange }) {
+export default function TabBar({ activeTab, onTabChange, trainingMode }) {
+  // Tracking mode users don't have a plan — hide the Plan tab to avoid dead ends
+  const visibleTabs = TABS.filter(tab => !(tab.id === 'plan' && trainingMode === 'tracking'))
+
   return (
     <nav className="tab-bar">
-      {TABS.map(tab => (
+      {visibleTabs.map(tab => (
         <button
           key={tab.id}
           className={`tab-bar-btn ${activeTab === tab.id ? 'active' : ''}`}

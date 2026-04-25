@@ -15,7 +15,7 @@ import PlanTab from './components/tabs/PlanTab'
 import CoachTab from './components/tabs/CoachTab'
 import ProfileTab from './components/tabs/ProfileTab'
 import FitnessTab from './components/tabs/FitnessTab'
-import { exchangeStravaCode } from './utils/stravaUtils'
+import { exchangeStravaCode, getValidToken, fetchAllStravaRuns } from './utils/stravaUtils'
 
 // Views: 'loading' | 'auth' | 'onboarding' | 'generating' | 'app'
 export default function App() {
@@ -36,6 +36,7 @@ export default function App() {
   // AI-generated adaptive plan
   const [aiPlan, setAiPlan] = useState(null)
   const [aiPlanGenerating, setAiPlanGenerating] = useState(false)
+  const [lastPlanChange, setLastPlanChange] = useState(null) // reason shown as toast
   const aiPlanRef = useRef(null)       // mirrors aiPlan, avoids stale closures
   const workoutLogsRef = useRef([])    // mirrors workoutLogs, for AI check after upsert
 
@@ -91,7 +92,21 @@ export default function App() {
         return
       }
 
-      setProfile(profileData)
+      // Backfill schedule_since for existing users who don't have it set yet.
+      // Without this, buildPhaseUtils marks ALL past days as "missed".
+      let activeProfile = profileData
+      if (!profileData.schedule_since) {
+        const today = new Date().toISOString().split('T')[0]
+        const { data: patched } = await supabase
+          .from('profiles')
+          .update({ schedule_since: today })
+          .eq('id', authUser.id)
+          .select()
+          .single()
+        if (patched) activeProfile = patched
+      }
+
+      setProfile(activeProfile)
 
       // Handle pending Strava OAuth code
       if (window._pendingStravaCode) {
@@ -134,11 +149,11 @@ export default function App() {
       const apiKey = import.meta.env.VITE_ANTHROPIC_API_KEY
       const logs = logsRes.data || []
       const runs = runsRes.data || []
-      if (apiKey && profileData) {
-        const { should } = shouldRegeneratePlan(null, logs, null, profileData)
+      if (apiKey && activeProfile) {
+        const { should } = shouldRegeneratePlan(null, logs, null, activeProfile)
         if (should) {
           setAiPlanGenerating(true)
-          generateAIPlan(profileData, logs, runs, apiKey)
+          generateAIPlan(activeProfile, logs, runs, apiKey)
             .then(plan => {
               const enriched = { ...plan, lastChangeReason: null } // initial plan — no prior change
               setAiPlan(enriched)
@@ -172,6 +187,8 @@ export default function App() {
           email: user.email,
           ...formData,
           onboarding_completed: true,
+          // Set schedule_since so days before today aren't marked as "missed"
+          schedule_since: formData.schedule_since || new Date().toISOString().split('T')[0],
         }
         const { data: savedProfile, error: profileError } = await supabase
           .from('profiles')
@@ -203,6 +220,7 @@ export default function App() {
           email: user.email,
           ...formData,
           onboarding_completed: true,
+          schedule_since: formData.schedule_since || new Date().toISOString().split('T')[0],
         }
         const { data: savedProfile, error: profileError } = await supabase
           .from('profiles')
@@ -271,62 +289,87 @@ export default function App() {
   // Upsert by ID so an RPE update doesn't duplicate. After each upsert,
   // check if the AI plan needs regeneration (significant changes only).
   const handleLogAdded = useCallback((newLog) => {
-    // 1. Upsert log in state (pure, no side effects)
-    setWorkoutLogs(prev => {
-      const idx = prev.findIndex(l => l.id === newLog.id)
-      let next
-      if (idx >= 0) {
-        next = [...prev]; next[idx] = newLog
-      } else {
-        next = [newLog, ...prev]
-      }
-      workoutLogsRef.current = next // keep ref in sync
-      return next
-    })
+    // Compute updated logs once — used for both state update and AI check
+    const prev = workoutLogsRef.current
+    const idx = prev.findIndex(l => l.id === newLog.id)
+    const updatedLogs = idx >= 0
+      ? prev.map((l, i) => i === idx ? newLog : l)
+      : [newLog, ...prev]
 
-    // 2. AI plan regeneration check — runs after state update, no setState needed
+    // 1. Update state + ref together
+    workoutLogsRef.current = updatedLogs
+    setWorkoutLogs(updatedLogs)
+
+    // 2. AI plan regeneration check
     const apiKey = import.meta.env.VITE_ANTHROPIC_API_KEY
     if (!apiKey) return
 
-    const updatedLogs = (() => {
-      const idx = workoutLogsRef.current.findIndex(l => l.id === newLog.id)
-      if (idx >= 0) {
-        const arr = [...workoutLogsRef.current]; arr[idx] = newLog; return arr
-      }
-      return [newLog, ...workoutLogsRef.current]
-    })()
+    // Guard against concurrent generation — second call would overwrite first with stale context
+    if (aiPlanRef.current?._generating) return
 
     const { should, reason } = shouldRegeneratePlan(newLog, updatedLogs, aiPlanRef.current, profile)
     if (should) {
+      aiPlanRef.current = { ...aiPlanRef.current, _generating: true }
       setAiPlanGenerating(true)
       generateAIPlan(profile, updatedLogs, stravaRuns, apiKey)
         .then(plan => {
           const enriched = { ...plan, lastChangeReason: reason }
           setAiPlan(enriched)
           aiPlanRef.current = enriched
+          setLastPlanChange(reason) // trigger toast
         })
-        .catch(err => console.warn('AI plan generation failed:', err))
+        .catch(err => {
+          // Clear generating flag so next log can retry
+          if (aiPlanRef.current?._generating) {
+            aiPlanRef.current = { ...aiPlanRef.current, _generating: false }
+          }
+          console.warn('AI plan generation failed:', err)
+        })
         .finally(() => setAiPlanGenerating(false))
     }
   }, [profile, stravaRuns])
 
   // ── Delete workout log ─────────────────────────────────────────
   const handleLogDeleted = useCallback(async (logId) => {
-    setWorkoutLogs(prev => prev.filter(l => l.id !== logId))
+    // Update both state and ref together so AI checks don't use stale data
+    const updated = workoutLogsRef.current.filter(l => l.id !== logId)
+    workoutLogsRef.current = updated
+    setWorkoutLogs(updated)
     try {
       await supabase.from('workout_logs').delete().eq('id', logId).eq('user_id', user.id)
     } catch (err) {
       console.error('Failed to delete log:', err)
-      // Reload logs on failure
+      // Reload logs on failure — keep ref in sync too
       const { data } = await supabase.from('workout_logs').select('*').eq('user_id', user.id).order('workout_date', { ascending: false })
-      if (data) setWorkoutLogs(data)
+      if (data) { setWorkoutLogs(data); workoutLogsRef.current = data }
     }
   }, [user])
 
   // ── Update profile ─────────────────────────────────────────────
+  // When key training fields change, also regenerate the AI plan.
+  const REGEN_FIELDS = ['training_days', 'sessions_per_week', 'flexibility_mode', 'marathon_date', 'target_pace_min', 'target_pace_sec']
   const handleProfileUpdate = useCallback((updatedProfile) => {
-    setProfile(updatedProfile)
-  }, [])
+    setProfile(prev => {
+      // Check if any planning-relevant field changed
+      const changed = prev && REGEN_FIELDS.some(f => JSON.stringify(updatedProfile[f]) !== JSON.stringify(prev[f]))
+      if (changed) {
+        const apiKey = import.meta.env.VITE_ANTHROPIC_API_KEY
+        if (apiKey) {
+          setAiPlanGenerating(true)
+          generateAIPlan(updatedProfile, workoutLogsRef.current, stravaRuns, apiKey)
+            .then(plan => {
+              const enriched = { ...plan, lastChangeReason: 'Profil aktualisiert — Plan neu berechnet' }
+              setAiPlan(enriched)
+              aiPlanRef.current = enriched
+              setLastPlanChange('Profil aktualisiert — Plan neu berechnet')
+            })
+            .catch(err => console.warn('AI plan regen after profile update failed:', err))
+            .finally(() => setAiPlanGenerating(false))
+        }
+      }
+      return updatedProfile
+    })
+  }, [stravaRuns])
 
   // ── Update chat messages ───────────────────────────────────────
   const handleMessagesUpdate = useCallback((updaterOrMessages) => {
@@ -336,6 +379,88 @@ export default function App() {
         : updaterOrMessages
     )
   }, [])
+
+  // ── Update Strava runs + trigger AI plan regen with new data ──
+  const handleRunsUpdate = useCallback((newRuns) => {
+    setStravaRuns(newRuns)
+    const apiKey = import.meta.env.VITE_ANTHROPIC_API_KEY
+    if (!apiKey || !profile) return
+    // Regenerate AI plan with newly synced Strava data
+    setAiPlanGenerating(true)
+    generateAIPlan(profile, workoutLogsRef.current, newRuns, apiKey)
+      .then(plan => {
+        const enriched = { ...plan, lastChangeReason: 'Strava synchronisiert — Plan aktualisiert' }
+        setAiPlan(enriched)
+        aiPlanRef.current = enriched
+        setLastPlanChange('Neue Strava-Daten — Plan angepasst')
+      })
+      .catch(err => console.warn('AI plan regen after Strava sync failed:', err))
+      .finally(() => setAiPlanGenerating(false))
+  }, [profile])
+
+  // ── Global Strava auto-sync (on app load + on visibility change) ─
+  const stravaAutoSyncRef = useRef(false)
+  const performStravaSync = useCallback(async (currentProfile) => {
+    if (!currentProfile?.strava_access_token) return
+    const lastSyncTime = currentProfile.strava_last_sync
+      ? new Date(currentProfile.strava_last_sync).getTime() : 0
+    if (Date.now() - lastSyncTime < 30 * 60 * 1000) return // skip if synced <30min ago
+    try {
+      const token = await getValidToken(currentProfile, supabase)
+      if (!token) return
+      const runs = await fetchAllStravaRuns(token)
+      if (!runs.length) return
+      const rows = runs.map(r => ({
+        user_id: currentProfile.id,
+        strava_id: String(r.id),
+        start_date: r.start_date,
+        distance: r.distance,
+        moving_time: r.moving_time,
+        average_speed: r.average_speed,
+        average_heartrate: r.average_heartrate || null,
+        max_heartrate: r.max_heartrate || null,
+        total_elevation_gain: r.total_elevation_gain || 0,
+        name: r.name,
+      }))
+      await supabase.from('strava_runs').upsert(rows, { onConflict: 'strava_id' })
+      const { data: allRuns } = await supabase
+        .from('strava_runs').select('*')
+        .eq('user_id', currentProfile.id)
+        .order('start_date', { ascending: false })
+      const merged = allRuns || rows
+      setStravaRuns(merged)
+      const now = new Date().toISOString()
+      await supabase.from('profiles').update({ strava_last_sync: now }).eq('id', currentProfile.id)
+      setProfile(p => p ? { ...p, strava_last_sync: now } : p)
+      // Trigger AI plan regen with fresh data
+      const apiKey = import.meta.env.VITE_ANTHROPIC_API_KEY
+      if (apiKey) {
+        generateAIPlan(currentProfile, workoutLogsRef.current, merged, apiKey)
+          .then(plan => {
+            const enriched = { ...plan, lastChangeReason: 'Strava synchronisiert — Plan aktualisiert' }
+            setAiPlan(enriched)
+            aiPlanRef.current = enriched
+          })
+          .catch(() => {})
+      }
+    } catch (err) {
+      console.warn('Auto Strava sync failed:', err)
+    }
+  }, [])
+
+  // Run on app load (after profile is set) + on tab visibility change
+  useEffect(() => {
+    if (view !== 'app' || !profile) return
+    if (!stravaAutoSyncRef.current) {
+      stravaAutoSyncRef.current = true
+      performStravaSync(profile)
+    }
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') performStravaSync(profile)
+    }
+    document.addEventListener('visibilitychange', onVisible)
+    return () => document.removeEventListener('visibilitychange', onVisible)
+  }, [view, profile, performStravaSync])
 
   // ── Regenerate plan (with Strava-calibrated pace if available) ─
   const handleRegeneratePlan = useCallback(() => {
@@ -426,6 +551,8 @@ export default function App() {
               onConfirmRacePlan={handleConfirmRacePlan}
               aiPlan={aiPlan}
               aiPlanGenerating={aiPlanGenerating}
+              lastPlanChange={lastPlanChange}
+              onPlanChangeDismiss={() => setLastPlanChange(null)}
             />
           )}
           {activeTab === 'plan' && (
@@ -436,6 +563,7 @@ export default function App() {
               onToggleComplete={handleToggleComplete}
               workoutLogs={workoutLogs}
               stravaRuns={stravaRuns}
+              onTabChange={setActiveTab}
               onProfileUpdate={handleProfileUpdate}
             />
           )}
@@ -448,6 +576,7 @@ export default function App() {
               chatMessages={chatMessages}
               onMessagesUpdate={handleMessagesUpdate}
               aiPlan={aiPlan}
+              stravaRuns={stravaRuns}
             />
           )}
           {activeTab === 'fitness' && (
@@ -455,7 +584,7 @@ export default function App() {
               user={user}
               profile={profile}
               onProfileUpdate={handleProfileUpdate}
-              onRunsUpdate={setStravaRuns}
+              onRunsUpdate={handleRunsUpdate}
               workoutLogs={workoutLogs}
             />
           )}
@@ -475,7 +604,7 @@ export default function App() {
           )}
         </div>
         <PWAInstallBanner />
-        <TabBar activeTab={activeTab} onTabChange={setActiveTab} />
+        <TabBar activeTab={activeTab} onTabChange={setActiveTab} trainingMode={profile.training_mode} />
       </div>
     )
   }

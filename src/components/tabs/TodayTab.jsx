@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from 'react'
+import { useState, useMemo, useEffect, useRef } from 'react'
 import { supabase } from '../../supabase'
 import {
   getCurrentPlanPosition,
@@ -47,7 +47,16 @@ const TYPE_ICONS = {
 
 function todayStr() { return new Date().toISOString().split('T')[0] }
 
-export default function TodayTab({ user, profile, trainingPlan, completedWorkoutIds, onToggleComplete, workoutLogs, onLogAdded, onLogDeleted, stravaRuns = [], onConfirmRacePlan, aiPlan = null, aiPlanGenerating = false }) {
+// Derive coach name + avatar from Supabase user metadata
+function useCoachIdentity(user) {
+  const fullName = user?.user_metadata?.full_name || user?.user_metadata?.name || ''
+  const firstName = fullName.split(' ')[0] || 'Seb'
+  const coachName = `Coach ${firstName}`
+  const avatarUrl = user?.user_metadata?.avatar_url || user?.user_metadata?.picture || '/coach-avatar.gif'
+  return { coachName, firstName, avatarUrl }
+}
+
+export default function TodayTab({ user, profile, trainingPlan, completedWorkoutIds, onToggleComplete, workoutLogs, onLogAdded, onLogDeleted, stravaRuns = [], onConfirmRacePlan, aiPlan = null, aiPlanGenerating = false, lastPlanChange = null, onPlanChangeDismiss }) {
   const trainingMode = profile.training_mode || 'race'
   const hasMarathon = !!profile.marathon_date
 
@@ -179,7 +188,53 @@ export default function TodayTab({ user, profile, trainingPlan, completedWorkout
       <div className="screen-scroll">
         <div className="screen-content" style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-5)' }}>
 
-          {/* TRACKING MODE — passive AI observer */}
+          {/* AI PLAN GENERATING SPINNER — shown for all users (BuildPhase has its own too) */}
+          {aiPlanGenerating && !buildPhase && (
+            <div style={{
+              background: 'var(--c-primary-dim)', border: '1px solid var(--c-primary)',
+              borderRadius: 12, padding: '10px 16px',
+              display: 'flex', alignItems: 'center', gap: 10,
+            }}>
+              <div className="spinner" style={{ width: 16, height: 16, borderWidth: 2 }} />
+              <span style={{ fontSize: 13, color: 'var(--c-primary)', fontWeight: 600 }}>
+                Plan wird angepasst…
+              </span>
+            </div>
+          )}
+
+          {/* COACH UPDATE CARD — shown when plan was just regenerated */}
+          {lastPlanChange && (
+            <CoachUpdateCard
+              user={user}
+              aiPlan={aiPlan}
+              triggerReason={lastPlanChange}
+              onDismiss={onPlanChangeDismiss}
+            />
+          )}
+
+          {/* RACE-DAY COUNTDOWN — ≤21 Tage bis Marathon */}
+          {daysLeft !== null && daysLeft <= 21 && daysLeft >= 0 && (
+            <RaceDayCountdown daysLeft={daysLeft} marathonName={profile.marathon_name} />
+          )}
+
+          {/* TRACKING MODE — new user hint or passive AI observer */}
+          {trainingMode === 'tracking' && workoutLogs.length === 0 && (
+            <div style={{
+              background: 'var(--c-primary-dim)', border: '1px solid var(--c-primary)',
+              borderRadius: 12, padding: '14px 16px',
+              display: 'flex', alignItems: 'flex-start', gap: 12,
+            }}>
+              <span style={{ fontSize: 22, flexShrink: 0 }}>🤖</span>
+              <div>
+                <div style={{ fontWeight: 700, fontSize: 14, color: 'var(--c-primary)', marginBottom: 4 }}>
+                  KI-Coach aktiv
+                </div>
+                <div style={{ fontSize: 13, color: 'var(--c-text-2)', lineHeight: 1.5 }}>
+                  Trag deine ersten Trainingseinheiten ein — ich beobachte Muster und gebe dir persönliches Feedback sobald ich genug Daten habe.
+                </div>
+              </div>
+            </div>
+          )}
           {trainingMode === 'tracking' && workoutLogs.length >= 3 && (
             <TrackingObserverCard workoutLogs={workoutLogs} profile={profile} />
           )}
@@ -321,6 +376,11 @@ export default function TodayTab({ user, profile, trainingPlan, completedWorkout
             </div>
           )}
 
+          {/* AI CONTEXT CARD — race-mode users in active 18-week plan */}
+          {trainingMode === 'race' && !buildPhase && aiPlan && !aiPlanGenerating && (
+            <AIContextCard aiPlan={aiPlan} />
+          )}
+
           {/* Today's Workout */}
           {displayWorkout && (
             <WorkoutHero
@@ -394,7 +454,7 @@ export default function TodayTab({ user, profile, trainingPlan, completedWorkout
           </>)}
 
           {/* Weekly Summary — always visible */}
-          <WeeklySummaryCard workoutLogs={workoutLogs} profile={profile} />
+          <WeeklySummaryCard workoutLogs={workoutLogs} profile={profile} aiPlan={aiPlan} />
 
         </div>
       </div>
@@ -443,6 +503,65 @@ export default function TodayTab({ user, profile, trainingPlan, completedWorkout
             </button>
           </div>
         </>
+      )}
+    </div>
+  )
+}
+
+// ── AI context card for race-mode users in the 18-week plan ──────────
+function AIContextCard({ aiPlan }) {
+  const TYPE_META = {
+    easy: { label: 'Easy Lauf', icon: '🏃', color: 'var(--c-easy)' },
+    tempo: { label: 'Tempo Lauf', icon: '⚡', color: 'var(--c-tempo)' },
+    long: { label: 'Langer Lauf', icon: '🛣️', color: 'var(--c-long)' },
+    interval: { label: 'Intervalle', icon: '🔥', color: 'var(--c-interval)' },
+    recovery: { label: 'Erholung', icon: '🌿', color: 'var(--c-recovery)' },
+    rest: { label: 'Ruhetag', icon: '💤', color: 'var(--c-text-3)' },
+    cross: { label: 'Cross-Training', icon: '🚴', color: 'var(--c-cross)' },
+    strength: { label: 'Krafttraining', icon: '🏋️', color: '#c77dff' },
+  }
+
+  const today = new Date()
+  const dayOfWeek = today.getDay() === 0 ? 6 : today.getDay() - 1
+  const todaySession = aiPlan?.sessions?.find(s => s.dayOfWeek === dayOfWeek && !s.isNextWeek)
+
+  return (
+    <div style={{
+      background: 'var(--c-card)', border: '1px solid var(--c-border)',
+      borderRadius: 14, padding: '12px 16px',
+      display: 'flex', flexDirection: 'column', gap: 8,
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--c-primary)', textTransform: 'uppercase', letterSpacing: '0.07em', display: 'flex', alignItems: 'center', gap: 5 }}>
+          <span>🤖</span> KI-Coach
+        </div>
+        {aiPlan.weekTheme && (
+          <div style={{ fontSize: 11, color: 'var(--c-text-3)', fontStyle: 'italic' }}>{aiPlan.weekTheme}</div>
+        )}
+      </div>
+
+      {todaySession ? (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <span style={{ fontSize: 24 }}>{TYPE_META[todaySession.type]?.icon || '📝'}</span>
+          <div>
+            <div style={{ fontSize: 14, fontWeight: 700, color: TYPE_META[todaySession.type]?.color || 'var(--c-primary)' }}>
+              {todaySession.title || TYPE_META[todaySession.type]?.label || todaySession.type}
+            </div>
+            <div style={{ fontSize: 12, color: 'var(--c-text-2)', marginTop: 1 }}>
+              {todaySession.pace && <span>{todaySession.pace}</span>}
+              {todaySession.distance_km && <span>{todaySession.pace ? ' · ' : ''}{todaySession.distance_km} km</span>}
+              {todaySession.duration_min && !todaySession.distance_km && <span>{todaySession.pace ? ' · ' : ''}{todaySession.duration_min} min</span>}
+            </div>
+          </div>
+        </div>
+      ) : (
+        <div style={{ fontSize: 13, color: 'var(--c-text-2)' }}>Heute kein Training geplant</div>
+      )}
+
+      {aiPlan.loadAssessment && (
+        <div style={{ fontSize: 12, color: 'var(--c-text-3)', borderTop: '1px solid var(--c-border)', paddingTop: 8, marginTop: 2 }}>
+          {aiPlan.loadAssessment}
+        </div>
       )}
     </div>
   )
@@ -526,7 +645,7 @@ function WorkoutHero({ workout, isToday, nextDate, nextWeek, isDone, onToggle })
   )
 }
 
-function WeeklySummaryCard({ workoutLogs, profile }) {
+function WeeklySummaryCard({ workoutLogs, profile, aiPlan }) {
   const today = new Date(); today.setHours(0, 0, 0, 0)
   const monday = getMondayOf(today)
   const mondayStr = monday.toISOString().split('T')[0]
@@ -574,7 +693,7 @@ function WeeklySummaryCard({ workoutLogs, profile }) {
       background: 'var(--c-card)', border: '1px solid var(--c-border)',
       borderRadius: 14, padding: '14px 16px',
     }}>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: aiPlan?.weekTheme ? 6 : 12 }}>
         <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--c-text)' }}>
           {showingLastWeek ? 'Letzte Woche' : 'Diese Woche'}
         </div>
@@ -582,6 +701,13 @@ function WeeklySummaryCard({ workoutLogs, profile }) {
           {activeMonday.toLocaleDateString('de-AT', { day: 'numeric', month: 'short' })} – {activeSunday.toLocaleDateString('de-AT', { day: 'numeric', month: 'short' })}
         </div>
       </div>
+
+      {/* AI plan week theme — context for the progress bar */}
+      {!showingLastWeek && aiPlan?.weekTheme && (
+        <div style={{ fontSize: 12, color: 'var(--c-primary)', fontWeight: 600, marginBottom: 10, display: 'flex', alignItems: 'center', gap: 5 }}>
+          <span>📋</span> {aiPlan.weekTheme}
+        </div>
+      )}
 
       {/* Progress bar */}
       <div style={{ height: 6, borderRadius: 999, background: 'var(--c-border)', overflow: 'hidden', marginBottom: 10 }}>
@@ -703,6 +829,151 @@ Antworte mit JSON: {"observation": "...", "emoji": "📈|📉|⚡|💤|🔥|✅"
             {insight?.observation}
           </div>
         )}
+      </div>
+    </div>
+  )
+}
+
+// ── Coach Update Card ──────────────────────────────────────────────────────────
+// Replaces the old PlanChangeToast — persistent card with Coach Seb identity.
+function CoachUpdateCard({ user, aiPlan, triggerReason, onDismiss }) {
+  const { coachName, firstName, avatarUrl } = useCoachIdentity(user)
+
+  // Auto-dismiss after 45 seconds if user doesn't interact
+  useEffect(() => {
+    const t = setTimeout(onDismiss, 45000)
+    return () => clearTimeout(t)
+  }, [onDismiss])
+
+  const changeReason = aiPlan?.changeReason || triggerReason
+  const coachNote    = aiPlan?.coachNote || null
+
+  return (
+    <div style={{
+      border: '1px solid var(--c-border)',
+      borderLeft: '3px solid var(--c-primary)',
+      borderRadius: '0 12px 12px 0',
+      padding: '12px 14px',
+      display: 'flex', alignItems: 'flex-start', gap: 10,
+      background: 'var(--c-card)',
+      animation: 'fadeInDown 0.3s ease',
+    }}>
+      {/* Coach avatar — small, animated */}
+      <div
+        className="coach-avatar-pulse"
+        style={{
+          width: 32, height: 32, borderRadius: '50%', flexShrink: 0,
+          background: 'transparent',
+          overflow: 'hidden',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+        }}
+      >
+        <img
+          src={avatarUrl}
+          alt={coachName}
+          style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: '50%' }}
+        />
+      </div>
+
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--c-primary)', marginBottom: 3 }}>
+          {coachName} hat deinen Plan angepasst
+        </div>
+        {changeReason && (
+          <div style={{ fontSize: 13, color: 'var(--c-text)', lineHeight: 1.45, marginBottom: coachNote ? 6 : 0 }}>
+            {changeReason}
+          </div>
+        )}
+        {coachNote && (
+          <div style={{ fontSize: 12, color: 'var(--c-text-2)', lineHeight: 1.45, fontStyle: 'italic' }}>
+            „{coachNote}"
+          </div>
+        )}
+      </div>
+
+      <button
+        onClick={onDismiss}
+        style={{
+          background: 'none', border: 'none', cursor: 'pointer',
+          color: 'var(--c-text-3)', fontSize: 18, lineHeight: 1,
+          padding: '0 2px', flexShrink: 0,
+        }}
+      >×</button>
+    </div>
+  )
+}
+
+// ── Race-Day Countdown ─────────────────────────────────────────────────────────
+function RaceDayCountdown({ daysLeft, marathonName }) {
+  const config = daysLeft === 0
+    ? { emoji: '🏆', title: 'Heute ist dein Marathon!', sub: 'Viel Kraft — du hast alles gegeben um heute zu glänzen!', bg: '#22c55e', border: '#16a34a' }
+    : daysLeft === 1
+    ? { emoji: '🌅', title: 'Morgen ist es soweit!', sub: 'Leg alles bereit, früh schlafen — du bist vorbereitet.', bg: 'var(--c-primary)', border: 'var(--c-primary)' }
+    : daysLeft <= 3
+    ? { emoji: '⚡', title: `Noch ${daysLeft} Tage!`, sub: 'Keine intensiven Einheiten mehr — Beine schonen, Energie tanken.', bg: 'var(--c-primary)', border: 'var(--c-primary)' }
+    : daysLeft <= 7
+    ? { emoji: '🎯', title: `Noch ${daysLeft} Tage`, sub: 'Letzte Woche — kurze, lockere Läufe. Vertraue deinem Training.', bg: 'var(--c-primary-dim)', border: 'var(--c-primary)' }
+    : daysLeft <= 14
+    ? { emoji: '📉', title: `${daysLeft} Tage bis zum Start`, sub: 'Tapering-Phase: Volumen reduzieren, Intensität leicht halten.', bg: 'var(--c-primary-dim)', border: 'var(--c-primary)' }
+    : { emoji: '🏁', title: `${daysLeft} Tage bis zum Marathon`, sub: 'Finale Aufbauphase — bleib konstant und vertraue dem Plan.', bg: 'var(--c-primary-dim)', border: 'var(--c-primary)' }
+
+  const isBig = daysLeft <= 1
+
+  return (
+    <div style={{
+      background: isBig ? config.bg : 'var(--c-card)',
+      border: `2px solid ${config.border}`,
+      borderRadius: 16,
+      padding: '18px 20px',
+      display: 'flex',
+      alignItems: 'center',
+      gap: 16,
+      overflow: 'hidden',
+      position: 'relative',
+    }}>
+      {/* Decorative ring */}
+      {isBig && (
+        <div style={{
+          position: 'absolute', top: -30, right: -30,
+          width: 120, height: 120, borderRadius: '50%',
+          background: 'rgba(255,255,255,0.12)',
+          pointerEvents: 'none',
+        }} />
+      )}
+
+      {/* Countdown ring */}
+      <div style={{
+        width: 64, height: 64, borderRadius: '50%', flexShrink: 0,
+        background: isBig ? 'rgba(255,255,255,0.2)' : config.border + '18',
+        border: `2.5px solid ${isBig ? 'rgba(255,255,255,0.5)' : config.border}`,
+        display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+      }}>
+        {daysLeft === 0 ? (
+          <span style={{ fontSize: 28 }}>{config.emoji}</span>
+        ) : (
+          <>
+            <span style={{ fontSize: 22, fontWeight: 800, color: isBig ? '#fff' : config.border, lineHeight: 1 }}>
+              {daysLeft}
+            </span>
+            <span style={{ fontSize: 9, fontWeight: 700, color: isBig ? 'rgba(255,255,255,0.75)' : config.border, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+              {daysLeft === 1 ? 'Tag' : 'Tage'}
+            </span>
+          </>
+        )}
+      </div>
+
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontWeight: 800, fontSize: 16, color: isBig ? '#fff' : 'var(--c-text)', lineHeight: 1.2, marginBottom: 4 }}>
+          {config.title}
+        </div>
+        {marathonName && (
+          <div style={{ fontSize: 11, fontWeight: 700, color: isBig ? 'rgba(255,255,255,0.8)' : config.border, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 3 }}>
+            {marathonName}
+          </div>
+        )}
+        <div style={{ fontSize: 12, color: isBig ? 'rgba(255,255,255,0.85)' : 'var(--c-text-2)', lineHeight: 1.4 }}>
+          {config.sub}
+        </div>
       </div>
     </div>
   )

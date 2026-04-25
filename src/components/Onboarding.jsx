@@ -40,6 +40,10 @@ export default function Onboarding({ user, onComplete }) {
     marathonName: '',
     targetWeeklyKm: 40,
     context: '',
+    // Coach Seb interview fields
+    currentWeeklyKm: null,
+    longestRecentRunKm: null,
+    trainingGoal: '',
   })
   const [error, setError] = useState('')
 
@@ -155,6 +159,11 @@ export default function Onboarding({ user, onComplete }) {
       payload.target_weekly_km = data.targetWeeklyKm
     }
 
+    // Coach Seb interview fields (all modes)
+    if (data.currentWeeklyKm !== null)   payload.current_weekly_km      = data.currentWeeklyKm
+    if (data.longestRecentRunKm !== null) payload.longest_recent_run_km  = data.longestRecentRunKm
+    if (data.trainingGoal)               payload.training_goal           = data.trainingGoal
+
     onComplete(payload)
   }
 
@@ -245,11 +254,18 @@ export default function Onboarding({ user, onComplete }) {
         )}
         {currentStepId === 'context' && (
           <StepContext
+            user={user}
             mode={data.trainingMode}
             value={data.context}
             onChange={v => update('context', v)}
             sports={data.crossTrainingSports}
             onToggleSport={toggleSport}
+            currentWeeklyKm={data.currentWeeklyKm}
+            onWeeklyKm={v => update('currentWeeklyKm', v)}
+            longestRecentRunKm={data.longestRecentRunKm}
+            onLongestRun={v => update('longestRecentRunKm', v)}
+            trainingGoal={data.trainingGoal}
+            onTrainingGoal={v => update('trainingGoal', v)}
           />
         )}
 
@@ -714,50 +730,206 @@ function ScheduleSection({ days, onToggleDay, sessions, onSessions, flexibility,
   )
 }
 
-// ── Step: Context + Other Sports (Last Step, all modes) ───────
-function StepContext({ mode, value, onChange, sports, onToggleSport }) {
+// ── Step: Coach Seb Interview + Other Sports (Last Step, all modes) ──
+function StepContext({
+  user, mode, value, onChange, sports, onToggleSport,
+  currentWeeklyKm, onWeeklyKm,
+  longestRecentRunKm, onLongestRun,
+  trainingGoal, onTrainingGoal,
+}) {
+  // How many interview questions have been answered → controls which are visible
+  const answeredCount =
+    (currentWeeklyKm !== null ? 1 : 0) +
+    (longestRecentRunKm !== null ? 1 : 0) +
+    (trainingGoal ? 1 : 0)
+
+  // Derive coach name + avatar from Supabase user metadata (Google OAuth)
+  const fullName = user?.user_metadata?.full_name || user?.user_metadata?.name || ''
+  const firstName = fullName.split(' ')[0] || 'Seb'
+  const coachName = `Coach ${firstName}`
+  const avatarUrl = user?.user_metadata?.avatar_url || user?.user_metadata?.picture || '/coach-avatar.gif'
+
+  const WEEKLY_KM_OPTIONS = [
+    { label: 'unter 20 km', value: 15 },
+    { label: '20–40 km',    value: 30 },
+    { label: '40–60 km',    value: 50 },
+    { label: '60+ km',      value: 70 },
+  ]
+  const LONGEST_RUN_OPTIONS = [
+    { label: 'unter 12 km', value: 8  },
+    { label: '12–18 km',    value: 15 },
+    { label: '18–25 km',    value: 22 },
+    { label: '25+ km',      value: 30 },
+  ]
+  const GOAL_OPTIONS = [
+    { label: 'Erstmals finishen',   value: 'finish'  },
+    { label: 'Persönliche Bestzeit', value: 'pb'     },
+    { label: 'Tempo verbessern',    value: 'improve' },
+  ]
+
   const placeholders = {
-    race: 'z.B. Hatte letztes Jahr ein Knieproblem, ist aber ausgeheilt. Ich trainiere früh morgens vor der Arbeit. Möchte unter 3:30 laufen. Mein letzter Marathon war in Wien in 3:48...',
-    fitness: 'z.B. Ich laufe seit 2 Jahren regelmäßig, möchte meine Kondition verbessern. Trainiere meistens morgens. Knie manchmal empfindlich...',
-    tracking: 'z.B. Ich folge meinem eigenen Trainingsplan. Laufe 4x pro Woche. Ziel ist ein Halbmarathon im Herbst...',
+    race:     'Verletzungen, vergangene Rennen, besondere Umstände…',
+    fitness:  'Trainingsgewohnheiten, Ziele, Beschwerden…',
+    tracking: 'Dein eigener Plan, Ziele, was du beobachtet haben möchtest…',
   }
 
   return (
     <div className="fade-up">
-      {/* Sports section */}
-      <h2 style={{ marginBottom: 'var(--sp-2)' }}>Weitere Sportarten?</h2>
-      <p style={{ marginBottom: 'var(--sp-4)', color: 'var(--c-text-2)' }}>
-        Wähle Sportarten die du zusätzlich machst — du kannst sie beim Loggen eintragen. Überspringen wenn du nur läufst.
-      </p>
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 'var(--sp-3)', marginBottom: 'var(--sp-6)' }}>
-        {CROSS_TRAINING_OPTIONS.map(s => (
-          <button
-            key={s.id}
-            className={`sport-chip ${sports.includes(s.id) ? 'selected' : ''}`}
-            onClick={() => onToggleSport(s.id)}
-          >
-            <span>{s.emoji}</span> {s.label}
-          </button>
-        ))}
+
+      {/* ── Coach Seb header ── */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 20 }}>
+        <div
+          className="coach-avatar-pulse"
+          style={{
+            width: 52, height: 52, borderRadius: '50%', flexShrink: 0,
+            background: 'transparent',
+            overflow: 'hidden',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+          }}
+        >
+          <img
+            src={avatarUrl}
+            alt={coachName}
+            style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: '50%' }}
+          />
+        </div>
+        <div>
+          <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--c-primary)' }}>{coachName}</div>
+          <div style={{ fontSize: 12, color: 'var(--c-text-3)', marginTop: 2 }}>
+            Noch ein paar Fragen für deinen Plan
+          </div>
+        </div>
       </div>
 
-      {/* Context section */}
-      <h2 style={{ marginBottom: 'var(--sp-2)' }}>Erzähl deinem Coach von dir</h2>
-      <p style={{ marginBottom: 'var(--sp-4)', color: 'var(--c-text-2)' }}>
-        Teile Verletzungen, Ziele, vergangene Rennen oder alles was dein Training beeinflusst. Je mehr Details, desto besser.
-      </p>
-      <div className="form-group">
-        <textarea
-          className="form-input"
-          placeholder={placeholders[mode] || placeholders.race}
-          value={value}
-          onChange={e => onChange(e.target.value)}
-          rows={6}
-        />
+      {/* ── Q1: Wochenvolumen ── */}
+      <CoachQuestion
+        question="Wie viele Kilometer läufst du aktuell pro Woche?"
+        visible
+        answered={currentWeeklyKm !== null}
+        answeredLabel={WEEKLY_KM_OPTIONS.find(o => o.value === currentWeeklyKm)?.label}
+        options={WEEKLY_KM_OPTIONS}
+        selectedValue={currentWeeklyKm}
+        onSelect={v => { onWeeklyKm(v) }}
+      />
+
+      {/* ── Q2: Längster Lauf (appears after Q1 answered) ── */}
+      <CoachQuestion
+        question="Was war dein längster Lauf in den letzten 4 Wochen?"
+        visible={currentWeeklyKm !== null}
+        answered={longestRecentRunKm !== null}
+        answeredLabel={LONGEST_RUN_OPTIONS.find(o => o.value === longestRecentRunKm)?.label}
+        options={LONGEST_RUN_OPTIONS}
+        selectedValue={longestRecentRunKm}
+        onSelect={v => { onLongestRun(v) }}
+      />
+
+      {/* ── Q3: Ziel (appears after Q2 answered) ── */}
+      <CoachQuestion
+        question="Was ist dein Hauptziel?"
+        visible={longestRecentRunKm !== null}
+        answered={!!trainingGoal}
+        answeredLabel={GOAL_OPTIONS.find(o => o.value === trainingGoal)?.label}
+        options={GOAL_OPTIONS}
+        selectedValue={trainingGoal}
+        onSelect={v => { onTrainingGoal(v) }}
+      />
+
+      {/* ── Sports + Freitext (erscheint nach allen 3 Fragen) ── */}
+      {answeredCount >= 3 && (
+        <div style={{ animation: 'fadeUp 0.3s ease both' }}>
+          <div style={{ borderTop: '1px solid var(--c-border)', margin: '20px 0 16px' }} />
+
+          <h3 style={{ fontSize: '0.9375rem', marginBottom: 'var(--sp-2)' }}>Weitere Sportarten?</h3>
+          <p style={{ marginBottom: 'var(--sp-3)', fontSize: '0.8125rem', color: 'var(--c-text-2)' }}>
+            Überspringen wenn du nur läufst.
+          </p>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 'var(--sp-2)', marginBottom: 'var(--sp-5)' }}>
+            {CROSS_TRAINING_OPTIONS.map(s => (
+              <button
+                key={s.id}
+                className={`sport-chip ${sports.includes(s.id) ? 'selected' : ''}`}
+                onClick={() => onToggleSport(s.id)}
+              >
+                <span>{s.emoji}</span> {s.label}
+              </button>
+            ))}
+          </div>
+
+          <h3 style={{ fontSize: '0.9375rem', marginBottom: 'var(--sp-2)' }}>Noch etwas wichtiges?</h3>
+          <p style={{ marginBottom: 'var(--sp-3)', fontSize: '0.8125rem', color: 'var(--c-text-2)' }}>
+            Verletzungen, Beschwerden, besondere Umstände — optional.
+          </p>
+          <div className="form-group">
+            <textarea
+              className="form-input"
+              placeholder={placeholders[mode] || placeholders.race}
+              value={value}
+              onChange={e => onChange(e.target.value)}
+              rows={4}
+            />
+          </div>
+        </div>
+      )}
+
+      {/* Hint wenn noch nicht alle Fragen beantwortet */}
+      {answeredCount < 3 && (
+        <p style={{ fontSize: '0.75rem', color: 'var(--c-text-3)', marginTop: 16 }}>
+          Je mehr du beantwortest, desto genauer wird dein erster Plan — du kannst aber auch direkt auf „Weiter" tippen.
+        </p>
+      )}
+    </div>
+  )
+}
+
+// ── Einzelne Coach-Frage mit Chip-Auswahl ─────────────────────
+function CoachQuestion({ question, visible, answered, answeredLabel, options, selectedValue, onSelect }) {
+  if (!visible) return null
+
+  return (
+    <div style={{ marginBottom: 16, animation: 'fadeUp 0.25s ease both' }}>
+      {/* Bubble */}
+      <div style={{
+        background: 'var(--c-card)',
+        border: '1px solid var(--c-border)',
+        borderRadius: '0 12px 12px 12px',
+        padding: '10px 14px',
+        fontSize: 14,
+        color: 'var(--c-text)',
+        lineHeight: 1.5,
+        marginBottom: 10,
+        display: 'inline-block',
+        maxWidth: '90%',
+      }}>
+        {question}
       </div>
-      <p style={{ marginTop: 'var(--sp-4)', fontSize: '0.8125rem', color: 'var(--c-text-3)' }}>
-        Optional, aber sehr empfohlen. Du kannst das später jederzeit in deinem Profil bearbeiten.
-      </p>
+
+      {/* Chips */}
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+        {options.map(opt => {
+          const isSelected = selectedValue === opt.value
+          return (
+            <button
+              key={opt.value}
+              onClick={() => onSelect(opt.value)}
+              style={{
+                padding: '7px 16px',
+                borderRadius: 20,
+                fontSize: 13,
+                fontWeight: isSelected ? 600 : 400,
+                fontFamily: 'var(--font)',
+                cursor: 'pointer',
+                transition: 'all 0.15s',
+                background: isSelected ? 'var(--c-primary)' : 'var(--c-card)',
+                border: `1.5px solid ${isSelected ? 'var(--c-primary)' : 'var(--c-border)'}`,
+                color: isSelected ? '#fff' : 'var(--c-text)',
+              }}
+            >
+              {isSelected && <span style={{ marginRight: 5 }}>✓</span>}
+              {opt.label}
+            </button>
+          )
+        })}
+      </div>
     </div>
   )
 }

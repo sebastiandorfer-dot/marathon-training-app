@@ -91,7 +91,8 @@ export default function BuildPhaseToday({
     notes: '',
     rpe: null,
   })
-  const [logging, setLogging]     = useState(false)
+  const [logging, setLogging]       = useState(false)
+  const [logSaveError, setLogSaveError] = useState('')
   const [rpeLogId, setRpeLogId]   = useState(null)
   const [rpeSaving, setRpeSaving] = useState(false)
 
@@ -102,94 +103,13 @@ export default function BuildPhaseToday({
     }
   }, [todayEntry?.type])
 
-  // AI coach recommendation (aware of today's plan)
-  const [recommendation, setRecommendation] = useState(null)
-  const [loadingRec, setLoadingRec]         = useState(false)
-  const [recError, setRecError]             = useState('')
-
-  useEffect(() => {
-    generateRecommendation()
-  }, [stravaRuns.length, workoutLogs.length])
-
-  async function generateRecommendation() {
-    const apiKey = import.meta.env.VITE_ANTHROPIC_API_KEY
-    if (!apiKey) return
-    setLoadingRec(true)
-    setRecError('')
-
-    const RPE_LABELS = { 1: 'leicht', 2: 'moderat', 3: 'sehr hart' }
-    const recentLogs = [...workoutLogs]
-      .sort((a, b) => new Date(b.workout_date) - new Date(a.workout_date))
-      .slice(0, 5)
-      .map(l => `${l.workout_date}: ${l.workout_type}${l.distance_km ? ` ${l.distance_km}km` : ''}${l.duration_min ? ` ${l.duration_min}min` : ''}${l.rpe ? ` RPE:${RPE_LABELS[l.rpe]}` : ''}`)
-      .join(', ')
-
-    const recentStravaRuns = stravaRuns.slice(0, 5).map(r => {
-      const km   = Math.round(r.distance / 100) / 10
-      const paceS = r.average_speed ? Math.round(1000 / r.average_speed) : null
-      const hr    = r.average_heartrate ? Math.round(r.average_heartrate) : null
-      return `${new Date(r.start_date).toLocaleDateString('de-AT', { day: 'numeric', month: 'short' })}: ${km}km${paceS ? ' @' + Math.floor(paceS/60) + ':' + String(paceS%60).padStart(2,'0') + '/km' : ''}${hr ? ' ♥' + hr : ''}`
-    }).join(', ')
-
-    const today      = new Date().toLocaleDateString('de-AT', { weekday: 'long', day: 'numeric', month: 'long' })
-    const plannedStr = todayEntry && !isRestDay
-      ? `Heute im Plan: ${TYPE_META[todayEntry.type]?.label || todayEntry.type}`
-      : 'Heute: Ruhetag laut Plan'
-
-    try {
-      const response = await fetch('https://api.anthropic.com/v1/messages', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-api-key': apiKey,
-          'anthropic-version': '2023-06-01',
-          'anthropic-dangerous-direct-browser-access': 'true',
-        },
-        body: JSON.stringify({
-          model: 'claude-haiku-4-5-20251001',
-          max_tokens: 300,
-          messages: [{
-            role: 'user',
-            content: `Du bist ein Marathontrainer. Gib eine kurze Trainingsempfehlung für heute.
-
-Athlet: ${profile.level}, Ziel ${profile.target_pace_min}:${String(profile.target_pace_sec).padStart(2,'0')}/km
-Marathon in: ${daysLeft} Tagen (noch ${daysToRacePlan} Tage bis zum 18-Wochen-Rennplan)
-${vo2maxDisp ? `Fitness Level: ${vo2maxDisp.label} (${vo2maxDisp.range})` : 'Noch keine Fitness-Daten'}
-${marathonRange ? `Marathonprognose: ${marathonRange.minTime}–${marathonRange.maxTime}` : ''}
-Heute: ${today}
-${plannedStr}
-Letzte Einheiten: ${recentLogs || 'keine'}
-Letzte Strava-Läufe: ${recentStravaRuns || 'keine'}
-
-Deine Empfehlung soll zum geplanten Workout passen (außer es gibt guten Grund davon abzuweichen).
-Antworte mit einem JSON-Objekt:
-{
-  "type": "easy|tempo|long|recovery|rest",
-  "title": "kurzer Titel (max 5 Wörter)",
-  "distance_km": Zahl oder null,
-  "duration_min": Zahl oder null,
-  "pace_hint": "z.B. 5:30-6:00/km" oder null,
-  "reason": "1-2 Sätze warum genau das heute sinnvoll ist"
-}`,
-          }],
-        }),
-      })
-
-      if (!response.ok) throw new Error('API Fehler')
-      const data = await response.json()
-      const text = data.content[0].text
-      const jsonMatch = text.match(/\{[\s\S]*\}/)
-      if (jsonMatch) setRecommendation(JSON.parse(jsonMatch[0]))
-    } catch {
-      setRecError('Empfehlung konnte nicht geladen werden.')
-    } finally {
-      setLoadingRec(false)
-    }
-  }
-
   async function submitLog() {
-    if (!logForm.distance_km && !logForm.duration_min) return
+    if (!logForm.distance_km && !logForm.duration_min) {
+      setLogSaveError('Gib zumindest Distanz oder Dauer ein.')
+      return
+    }
     setLogging(true)
+    setLogSaveError('')
     try {
       const { data, error } = await supabase.from('workout_logs').insert({
         user_id: user.id,
@@ -203,9 +123,12 @@ Antworte mit einem JSON-Objekt:
       if (error) throw error
       onLogAdded(data)
       setLogOpen(false)
+      setLogSaveError('')
       setLogForm({ workout_date: new Date().toISOString().split('T')[0], workout_type: 'easy', distance_km: '', duration_min: '', notes: '', rpe: null })
       if (!logForm.rpe) setRpeLogId(data.id)
-    } catch { /* ignore */ } finally {
+    } catch (err) {
+      setLogSaveError(err.message || 'Fehler beim Speichern. Bitte nochmal versuchen.')
+    } finally {
       setLogging(false)
     }
   }
@@ -224,7 +147,6 @@ Antworte mit einem JSON-Objekt:
   }
 
   const planMeta    = todayEntry ? (TYPE_META[todayEntry.type] || TYPE_META.rest) : TYPE_META.rest
-  const recMeta     = recommendation ? (TYPE_META[recommendation.type] || TYPE_META.easy) : null
   // Use AI session hint if available, fall back to static calculation
   const workoutHint = (!isRestDay && todayEntry)
     ? (aiSession
@@ -348,6 +270,19 @@ Antworte mit einem JSON-Objekt:
                   {todayEntry.logs[0].duration_min ? `${todayEntry.logs[0].duration_min} min` : ''}
                 </div>
               )}
+              {/* AI type override badge — show when AI recommends a different workout than the schedule */}
+              {!alreadyLogged && !isRestDay && aiSession && todayEntry && aiSession.type !== todayEntry.type && (
+                <div style={{
+                  display: 'inline-flex', alignItems: 'center', gap: 5, marginTop: 8,
+                  background: 'var(--c-primary-dim)', border: '1px solid var(--c-primary)',
+                  borderRadius: 8, padding: '4px 10px', fontSize: 12,
+                }}>
+                  <span>🤖</span>
+                  <span style={{ color: 'var(--c-primary)', fontWeight: 600 }}>
+                    KI empfiehlt heute: {TYPE_META[aiSession.type]?.label || aiSession.type}
+                  </span>
+                </div>
+              )}
               {/* Workout hints: pace, structure, tip */}
               {!alreadyLogged && workoutHint && (
                 <div style={{ marginTop: 10, display: 'flex', flexWrap: 'wrap', gap: 8 }}>
@@ -391,69 +326,13 @@ Antworte mit einem JSON-Objekt:
         profile={profile}
         predictedPaceSec={predictedPaceSec}
         vo2max={vo2max}
+        vo2maxDisp={vo2maxDisp}
         category={category}
         daysLeft={daysLeft}
       />
 
-      {/* AI Coach recommendation */}
-      <div>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
-          <h3 style={{ fontSize: '1rem' }}>Coach-Empfehlung</h3>
-          {!loadingRec && (
-            <button onClick={generateRecommendation}
-              style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--c-text-3)', fontSize: 12, fontFamily: 'var(--font)', padding: '4px 8px' }}>
-              ↻ Neu
-            </button>
-          )}
-        </div>
-
-        {loadingRec ? (
-          <div style={{ background: 'var(--c-card)', border: '1px solid var(--c-border)', borderRadius: 14, padding: 20, display: 'flex', alignItems: 'center', gap: 12 }}>
-            <div className="spinner" style={{ width: 20, height: 20, borderWidth: 2 }} />
-            <span style={{ color: 'var(--c-text-2)', fontSize: 14 }}>Coach denkt nach…</span>
-          </div>
-        ) : recommendation ? (
-          <div style={{ background: 'var(--c-card)', border: `1px solid ${recMeta?.color || 'var(--c-border)'}`, borderRadius: 14, overflow: 'hidden' }}>
-            <div style={{ padding: '14px 16px 10px' }}>
-              <div style={{ fontSize: 11, fontWeight: 700, color: recMeta?.color || 'var(--c-text)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 6 }}>
-                {recMeta?.label || recommendation.type}
-              </div>
-              <div style={{ fontSize: 18, fontWeight: 700, color: 'var(--c-text)', marginBottom: 10 }}>
-                {recommendation.title}
-              </div>
-              {recommendation.type !== 'rest' && (
-                <div style={{ display: 'flex', gap: 16 }}>
-                  {recommendation.distance_km && (
-                    <div>
-                      <div style={{ fontSize: 18, fontWeight: 700, color: 'var(--c-text)' }}>{recommendation.distance_km}</div>
-                      <div style={{ fontSize: 11, color: 'var(--c-text-3)' }}>km</div>
-                    </div>
-                  )}
-                  {recommendation.duration_min && (
-                    <div>
-                      <div style={{ fontSize: 18, fontWeight: 700, color: 'var(--c-text)' }}>{recommendation.duration_min}</div>
-                      <div style={{ fontSize: 11, color: 'var(--c-text-3)' }}>min</div>
-                    </div>
-                  )}
-                  {recommendation.pace_hint && (
-                    <div>
-                      <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--c-text)' }}>{recommendation.pace_hint}</div>
-                      <div style={{ fontSize: 11, color: 'var(--c-text-3)' }}>Pace</div>
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-            <div style={{ borderTop: '1px solid var(--c-border)', padding: '10px 16px', background: 'var(--c-card-hover)' }}>
-              <p style={{ fontSize: 13, color: 'var(--c-text-2)', lineHeight: 1.5, margin: 0 }}>💬 {recommendation.reason}</p>
-            </div>
-          </div>
-        ) : recError ? (
-          <div style={{ background: 'var(--c-card)', border: '1px solid var(--c-border)', borderRadius: 14, padding: 16, color: 'var(--c-text-3)', fontSize: 14 }}>
-            {recError}
-          </div>
-        ) : null}
-      </div>
+      {/* Week plan overview — remaining sessions + next week preview */}
+      <WeekPlanOverview aiPlan={aiPlan} />
 
       {/* Log form */}
       <button onClick={() => setLogOpen(o => !o)}
@@ -530,6 +409,12 @@ Antworte mit einem JSON-Objekt:
               ))}
             </div>
           </div>
+
+          {logSaveError && (
+            <div style={{ background: '#fef2f2', border: '1px solid #fca5a5', borderRadius: 8, padding: '8px 12px', fontSize: 13, color: '#dc2626', display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span>⚠</span> {logSaveError}
+            </div>
+          )}
 
           <button className="btn btn-primary btn-lg" onClick={submitLog} disabled={logging}>
             {logging ? 'Speichern…' : 'Eintragen'}
@@ -649,8 +534,202 @@ function getWorkoutHints(type, profile) {
   }
 }
 
+// ── Week Plan Overview — remaining sessions from AI plan ──────────────────────
+function WeekPlanOverview({ aiPlan }) {
+  const [showNextWeek, setShowNextWeek] = useState(false)
+
+  if (!aiPlan?.sessions?.length) return null
+
+  // Convert to app convention: 0=Mon ... 6=Sun (same as AI plan)
+  const todayDow = new Date().getDay() === 0 ? 6 : new Date().getDay() - 1
+
+  // Remaining sessions this week (after today, not next week)
+  const remainingThisWeek = aiPlan.sessions.filter(s =>
+    !s.isNextWeek && s.dayOfWeek > todayDow
+  )
+
+  // Next week sessions
+  const nextWeekSessions = aiPlan.sessions.filter(s => s.isNextWeek)
+
+  if (remainingThisWeek.length === 0 && nextWeekSessions.length === 0) return null
+
+  const DAY_NAMES = ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So']
+
+  return (
+    <div>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+        <h3 style={{ fontSize: '1rem', margin: 0 }}>Diese Woche</h3>
+        {aiPlan.weekTheme && (
+          <span style={{ fontSize: 12, color: 'var(--c-text-3)', fontStyle: 'italic', maxWidth: '55%', textAlign: 'right', lineHeight: 1.3 }}>
+            {aiPlan.weekTheme}
+          </span>
+        )}
+      </div>
+
+      {remainingThisWeek.length > 0 ? (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          {remainingThisWeek.map((session, i) => (
+            <SessionRow key={i} session={session} dayName={DAY_NAMES[session.dayOfWeek]} />
+          ))}
+        </div>
+      ) : (
+        <div style={{ fontSize: 13, color: 'var(--c-text-3)', padding: '6px 0' }}>
+          Keine weiteren Einheiten diese Woche.
+        </div>
+      )}
+
+      {nextWeekSessions.length > 0 && (
+        <div style={{ marginTop: 12 }}>
+          <button
+            onClick={() => setShowNextWeek(v => !v)}
+            style={{
+              background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'var(--font)',
+              display: 'flex', alignItems: 'center', gap: 6, padding: '4px 0', marginBottom: 8,
+            }}
+          >
+            <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--c-text-2)' }}>
+              Nächste Woche
+            </span>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--c-text-3)" strokeWidth="2.5" strokeLinecap="round"
+              style={{ transform: showNextWeek ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s' }}>
+              <path d="M6 9l6 6 6-6"/>
+            </svg>
+          </button>
+
+          {showNextWeek && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {nextWeekSessions.map((session, i) => (
+                <SessionRow key={i} session={session} dayName={DAY_NAMES[session.dayOfWeek]} muted />
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function SessionRow({ session, dayName, muted = false }) {
+  const [expanded, setExpanded] = useState(false)
+  const meta = TYPE_META[session.type] || TYPE_META.easy
+  const hasDetails = session.structure || session.tip || session.pace
+
+  return (
+    <div style={{
+      background: 'var(--c-card)',
+      border: `1px solid ${expanded ? meta.color + '55' : muted ? 'var(--c-border)' : meta.color + '33'}`,
+      borderRadius: 10,
+      overflow: 'hidden',
+      opacity: muted ? 0.8 : 1,
+      transition: 'border-color 0.15s',
+    }}>
+      {/* Summary row — always visible, tappable */}
+      <button
+        onClick={() => hasDetails && setExpanded(v => !v)}
+        style={{
+          width: '100%', background: 'none', border: 'none', cursor: hasDetails ? 'pointer' : 'default',
+          fontFamily: 'var(--font)', padding: '10px 14px',
+          display: 'flex', alignItems: 'center', gap: 12, textAlign: 'left',
+        }}
+      >
+        {/* Day badge */}
+        <div style={{
+          width: 34, flexShrink: 0, textAlign: 'center',
+          background: muted ? 'var(--c-card-hover)' : meta.color + '18',
+          borderRadius: 8, padding: '5px 0',
+        }}>
+          <div style={{ fontSize: 10, fontWeight: 700, color: muted ? 'var(--c-text-3)' : meta.color, textTransform: 'uppercase' }}>
+            {dayName}
+          </div>
+          <div style={{ fontSize: 18, lineHeight: 1.2 }}>{meta.icon}</div>
+        </div>
+
+        {/* Label + stats */}
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: 14, fontWeight: 700, color: muted ? 'var(--c-text-2)' : 'var(--c-text)' }}>
+            {meta.label}
+          </div>
+          <div style={{ fontSize: 12, color: 'var(--c-text-3)', display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 2 }}>
+            {session.distance_km && <span>{session.distance_km} km</span>}
+            {session.duration_min && <span>{session.duration_min} min</span>}
+            {session.pace && (
+              <span style={{ color: muted ? 'var(--c-text-3)' : meta.color, fontWeight: 600 }}>
+                @ {session.pace}
+              </span>
+            )}
+          </div>
+        </div>
+
+        {/* Expand chevron */}
+        {hasDetails && (
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none"
+            stroke="var(--c-text-3)" strokeWidth="2.5" strokeLinecap="round"
+            style={{ flexShrink: 0, transform: expanded ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s' }}>
+            <path d="M6 9l6 6 6-6"/>
+          </svg>
+        )}
+      </button>
+
+      {/* Expanded detail panel */}
+      {expanded && (
+        <div style={{
+          borderTop: `1px solid ${meta.color}22`,
+          padding: '10px 14px 12px',
+          background: meta.color + '08',
+          display: 'flex', flexDirection: 'column', gap: 8,
+        }}>
+          {session.structure && (
+            <div>
+              <div style={{ fontSize: 10, fontWeight: 700, color: meta.color, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 3 }}>
+                Aufbau
+              </div>
+              <div style={{ fontSize: 13, color: 'var(--c-text-2)', lineHeight: 1.5 }}>
+                {session.structure}
+              </div>
+            </div>
+          )}
+          {session.pace && (
+            <div style={{ display: 'flex', gap: 16 }}>
+              <div style={{
+                background: 'var(--c-card)', border: `1px solid ${meta.color}33`,
+                borderRadius: 8, padding: '6px 12px', textAlign: 'center',
+              }}>
+                <div style={{ fontSize: 11, color: 'var(--c-text-3)', marginBottom: 1 }}>Pace</div>
+                <div style={{ fontSize: 14, fontWeight: 700, color: meta.color }}>{session.pace}</div>
+              </div>
+              {session.duration_min && (
+                <div style={{
+                  background: 'var(--c-card)', border: '1px solid var(--c-border)',
+                  borderRadius: 8, padding: '6px 12px', textAlign: 'center',
+                }}>
+                  <div style={{ fontSize: 11, color: 'var(--c-text-3)', marginBottom: 1 }}>Dauer</div>
+                  <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--c-text)' }}>{session.duration_min} min</div>
+                </div>
+              )}
+              {session.distance_km && (
+                <div style={{
+                  background: 'var(--c-card)', border: '1px solid var(--c-border)',
+                  borderRadius: 8, padding: '6px 12px', textAlign: 'center',
+                }}>
+                  <div style={{ fontSize: 11, color: 'var(--c-text-3)', marginBottom: 1 }}>Distanz</div>
+                  <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--c-text)' }}>{session.distance_km} km</div>
+                </div>
+              )}
+            </div>
+          )}
+          {session.tip && (
+            <div style={{ fontSize: 12, color: 'var(--c-text-2)', fontStyle: 'italic', lineHeight: 1.5 }}>
+              💡 {session.tip}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ── Pace Gap Card ──────────────────────────────────────────────────────────────
-function PaceGapCard({ profile, predictedPaceSec, vo2max, category, daysLeft }) {
+function PaceGapCard({ profile, predictedPaceSec, vo2max, vo2maxDisp, category, daysLeft }) {
   // Use 0 as fallback so arithmetic never produces NaN; check combined total > 0
   const targetPaceMin = parseInt(profile.target_pace_min) || 0
   const targetPaceSec = parseInt(profile.target_pace_sec) || 0
@@ -755,7 +834,7 @@ function PaceGapCard({ profile, predictedPaceSec, vo2max, category, daysLeft }) 
             </div>
 
             {/* Fitness footnote — category only, no raw VO2max number */}
-            {vo2maxDisp && (
+            {vo2maxDisp && predictedPaceSec && (
               <div style={{ textAlign: 'center', fontSize: 11, color: 'var(--c-text-3)', marginTop: 6 }}>
                 {vo2maxDisp.label} ({vo2maxDisp.range}) · Wenn Marathon morgen wäre: {formatMarathonTime(predictedPaceSec)}
               </div>

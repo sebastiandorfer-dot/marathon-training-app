@@ -28,6 +28,14 @@ export default function ProfileTab({ user, profile, trainingPlan, workoutLogs, c
   const [contextSaved, setContextSaved] = useState(false)
   const [contextError, setContextError] = useState('')
 
+  // Pace editing
+  const [editingPace, setEditingPace] = useState(false)
+  const [paceMin, setPaceMin] = useState(profile.target_pace_min ?? '')
+  const [paceSec, setPaceSec] = useState(profile.target_pace_sec ?? '')
+  const [savingPace, setSavingPace] = useState(false)
+  const [paceSaved, setPaceSaved] = useState(false)
+  const [paceError, setPaceError] = useState('')
+
   // Training schedule editing
   const [editingSchedule, setEditingSchedule]       = useState(false)
   const [schedTrainingDays, setSchedTrainingDays]   = useState(profile.training_days || [])
@@ -119,6 +127,32 @@ export default function ProfileTab({ user, profile, trainingPlan, workoutLogs, c
       setContextError(err.message || 'Failed to save.')
     } finally {
       setSavingContext(false)
+    }
+  }
+
+  async function savePace() {
+    const min = parseInt(paceMin)
+    const sec = parseInt(paceSec)
+    if (isNaN(min) || min < 3 || min > 9 || isNaN(sec) || sec < 0 || sec > 59) {
+      setPaceError('Pace muss zwischen 3:00 und 9:59 min/km liegen.')
+      return
+    }
+    setSavingPace(true)
+    setPaceError('')
+    try {
+      const { error } = await supabase.from('profiles').update({
+        target_pace_min: min,
+        target_pace_sec: sec,
+      }).eq('id', user.id)
+      if (error) throw error
+      onProfileUpdate({ ...profile, target_pace_min: min, target_pace_sec: sec })
+      setPaceSaved(true)
+      setEditingPace(false)
+      setTimeout(() => setPaceSaved(false), 2500)
+    } catch (err) {
+      setPaceError(err.message || 'Fehler beim Speichern.')
+    } finally {
+      setSavingPace(false)
     }
   }
 
@@ -284,12 +318,66 @@ export default function ProfileTab({ user, profile, trainingPlan, workoutLogs, c
             <h3 style={{ fontSize: '1rem' }}>Trainingsdetails</h3>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-3)' }}>
               <ProfileRow label="Level" value={<span style={{ textTransform: 'capitalize' }}>{profile.level}</span>} />
-              <ProfileRow label="Zielpace" value={`${formatPace(profile.target_pace_min, profile.target_pace_sec)} min/km`} />
               <ProfileRow label="Trainingstage" value={(profile.training_days || []).map(d => DAYS_FULL[d]).join(', ')} />
               {profile.cross_training_sports?.length > 0 && (
                 <ProfileRow label="Cross-Training" value={profile.cross_training_sports.join(', ')} />
               )}
             </div>
+          </div>
+
+          {/* Editable Zielpace */}
+          <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-4)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <h3 style={{ fontSize: '1rem' }}>Zielpace</h3>
+              {!editingPace ? (
+                <button className="btn btn-sm btn-ghost" onClick={() => { setEditingPace(true); setPaceMin(profile.target_pace_min ?? ''); setPaceSec(profile.target_pace_sec ?? ''); setPaceError('') }}>Bearbeiten</button>
+              ) : (
+                <div style={{ display: 'flex', gap: 'var(--sp-2)' }}>
+                  <button className="btn btn-sm btn-ghost" onClick={() => { setEditingPace(false); setPaceError('') }}>Abbrechen</button>
+                  <button className="btn btn-sm btn-primary" onClick={savePace} disabled={savingPace}>
+                    {savingPace ? 'Speichern…' : 'Speichern'}
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {!editingPace ? (
+              <div>
+                <div style={{ fontSize: '1.5rem', fontWeight: 800, color: 'var(--c-primary)' }}>
+                  {formatPace(profile.target_pace_min, profile.target_pace_sec)}
+                  <span style={{ fontSize: '0.875rem', fontWeight: 500, color: 'var(--c-text-3)', marginLeft: 6 }}>min/km</span>
+                </div>
+                <div style={{ fontSize: '0.8125rem', color: 'var(--c-text-3)', marginTop: 4 }}>
+                  Dein Zieltempo für den Marathon. Wird für Pace-Berechnungen und den KI-Plan verwendet.
+                </div>
+                {paceSaved && <div className="alert alert-success" style={{ marginTop: 'var(--sp-3)' }}><span>✓</span> Gespeichert! KI-Plan wird aktualisiert.</div>}
+              </div>
+            ) : (
+              <div>
+                <div style={{ fontSize: '0.8125rem', color: 'var(--c-text-3)', marginBottom: 'var(--sp-3)' }}>
+                  Gib dein Zieltempo pro Kilometer ein (z.B. 5:30 = 5 min 30 sek).
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <input
+                      type="number" className="form-input" placeholder="5"
+                      value={paceMin} min={3} max={9} step={1}
+                      onChange={e => setPaceMin(e.target.value)}
+                      style={{ width: 70, textAlign: 'center', fontSize: '1.25rem', fontWeight: 700 }}
+                    />
+                    <span style={{ fontSize: '1.1rem', color: 'var(--c-text-3)', fontWeight: 700 }}>:</span>
+                    <input
+                      type="number" className="form-input" placeholder="30"
+                      value={paceSec} min={0} max={59} step={1}
+                      onChange={e => setPaceSec(e.target.value)}
+                      style={{ width: 70, textAlign: 'center', fontSize: '1.25rem', fontWeight: 700 }}
+                    />
+                  </div>
+                  <span style={{ fontSize: '0.875rem', color: 'var(--c-text-3)' }}>min/km</span>
+                </div>
+                {paceError && <div className="alert alert-error" style={{ marginTop: 'var(--sp-3)' }}><span>⚠</span> {paceError}</div>}
+              </div>
+            )}
           </div>
 
           {/* Training schedule editing */}
@@ -333,7 +421,7 @@ export default function ProfileTab({ user, profile, trainingPlan, workoutLogs, c
                     ? '🔒 Nur diese Tage'
                     : '🔄 Flexibel'}
                 </div>
-                {scheduleSaved && <div className="alert alert-success"><span>✓</span> Gespeichert! Plan wird neu berechnet.</div>}
+                {scheduleSaved && <div className="alert alert-success"><span>✓</span> Gespeichert! KI-Plan wird aktualisiert.</div>}
               </div>
             ) : (
               // Edit view

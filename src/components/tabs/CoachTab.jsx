@@ -8,12 +8,21 @@ import {
 } from '../../utils/fitnessUtils'
 import { getTodayBuildEntry } from '../../utils/buildPhaseUtils'
 
-export default function CoachTab({ user, profile, trainingPlan, workoutLogs, chatMessages, onMessagesUpdate, aiPlan = null }) {
+// Derive coach name + avatar from Supabase user metadata (same logic as TodayTab)
+function useCoachIdentity(user) {
+  const fullName = user?.user_metadata?.full_name || user?.user_metadata?.name || ''
+  const firstName = fullName.split(' ')[0] || 'Seb'
+  const coachName = `Coach ${firstName}`
+  const avatarUrl = user?.user_metadata?.avatar_url || user?.user_metadata?.picture || '/coach-avatar.gif'
+  return { coachName, firstName, avatarUrl }
+}
+
+export default function CoachTab({ user, profile, trainingPlan, workoutLogs, chatMessages, onMessagesUpdate, aiPlan = null, stravaRuns = [] }) {
+  const { coachName, firstName, avatarUrl } = useCoachIdentity(user)
   const [input, setInput] = useState('')
   const [streaming, setStreaming] = useState(false)
   const [error, setError] = useState('')
   const [streamingText, setStreamingText] = useState('')
-  const [stravaRuns, setStravaRuns] = useState([])
   const messagesEndRef = useRef(null)
   const inputRef = useRef(null)
   const abortRef = useRef(null)
@@ -68,13 +77,6 @@ export default function CoachTab({ user, profile, trainingPlan, workoutLogs, cha
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [chatMessages, streamingText])
-
-  // Load Strava runs for fitness context
-  useEffect(() => {
-    supabase.from('strava_runs').select('*').eq('user_id', user.id)
-      .order('start_date', { ascending: false })
-      .then(({ data }) => { if (data) setStravaRuns(data) })
-  }, [user.id])
 
   function buildSystemPrompt() {
     const trainingMode = profile.training_mode || 'race'
@@ -146,7 +148,7 @@ KI-TRAININGSPLAN (aktuell):
 `
     }
 
-    return `Du bist ein erfahrener Lauftrainer-KI. Du kennst den Athleten sehr gut und hast Zugriff auf alle seine Trainingsdaten. Antworte immer auf Deutsch, direkt und motivierend.
+    return `Du bist ${coachName}, ein erfahrener persönlicher Lauftrainer. Du kennst den Athleten sehr gut und hast Zugriff auf alle seine Trainingsdaten. Antworte immer auf Deutsch, direkt und motivierend — wie ein echter Coach, nicht wie eine KI.
 
 ATHLETENPROFIL:
 - Trainingsmodus: ${modeLabel}
@@ -221,7 +223,7 @@ COACHING-RICHTLINIEN:
           'anthropic-dangerous-direct-browser-access': 'true',
         },
         body: JSON.stringify({
-          model: 'claude-sonnet-4-5',
+          model: 'claude-sonnet-4-6',
           max_tokens: 1024,
           system: buildSystemPrompt(),
           messages: historyMessages,
@@ -302,14 +304,23 @@ COACHING-RICHTLINIEN:
     <div className="screen">
       <div className="screen-header">
         <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-3)' }}>
-          <div style={{
-            width: 38, height: 38, borderRadius: 'var(--r-full)',
-            background: 'var(--c-primary-dim)', border: '2px solid var(--c-primary)',
-            display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1.1rem',
-            flexShrink: 0,
-          }}>🤖</div>
+          <div
+            className="coach-avatar-pulse"
+            style={{
+              width: 38, height: 38, borderRadius: '50%', flexShrink: 0,
+              background: 'transparent',
+              overflow: 'hidden',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+            }}
+          >
+            <img
+              src={avatarUrl}
+              alt={coachName}
+              style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: '50%' }}
+            />
+          </div>
           <div>
-            <h2 style={{ fontSize: '1rem' }}>KI-Coach</h2>
+            <h2 style={{ fontSize: '1rem' }}>{coachName}</h2>
             <p style={{ fontSize: '0.75rem', color: 'var(--c-text-3)', marginTop: 1 }}>
               {streaming
                 ? <span style={{ color: 'var(--c-primary)' }}>Schreibt…</span>
@@ -333,12 +344,83 @@ COACHING-RICHTLINIEN:
         {chatMessages.length === 0 && !showStreaming ? (
           <div style={{ padding: 'var(--sp-8) var(--sp-4)', display: 'flex', flexDirection: 'column', gap: 'var(--sp-4)' }}>
             <div style={{ textAlign: 'center', marginBottom: 'var(--sp-2)' }}>
-              <div style={{ fontSize: '2rem', marginBottom: 'var(--sp-3)' }}>🤖</div>
-              <h3>Dein KI-Marathoncoach</h3>
+              <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 'var(--sp-3)' }}>
+                <div
+                  className="coach-avatar-pulse"
+                  style={{
+                    width: 64, height: 64, borderRadius: '50%',
+                    background: 'transparent',
+                    overflow: 'hidden',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  }}
+                >
+                  <img
+                    src={avatarUrl}
+                    alt={coachName}
+                    style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: '50%' }}
+                  />
+                </div>
+              </div>
+              <h3>{coachName}</h3>
               <p style={{ fontSize: '0.875rem', marginTop: 'var(--sp-2)', color: 'var(--c-text-2)' }}>
                 Ich kenne deinen Trainingsplan, deine Läufe und deine Fitness. Frag mich alles.
               </p>
             </div>
+
+            {/* Current AI Plan Context Card */}
+            {aiPlan && (
+              <div style={{
+                background: 'var(--c-card)',
+                border: '1px solid var(--c-primary)',
+                borderRadius: 12,
+                overflow: 'hidden',
+              }}>
+                <div style={{
+                  background: 'var(--c-primary-dim)',
+                  padding: '8px 14px',
+                  display: 'flex', alignItems: 'center', gap: 8,
+                }}>
+                  <span style={{ fontSize: 14 }}>📋</span>
+                  <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--c-primary)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+                    Aktueller Trainingsplan
+                  </span>
+                </div>
+                <div style={{ padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  {aiPlan.weekTheme && (
+                    <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+                      <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--c-text-3)', minWidth: 80 }}>Woche</span>
+                      <span style={{ fontSize: 13, color: 'var(--c-text)', fontWeight: 600 }}>{aiPlan.weekTheme}</span>
+                    </div>
+                  )}
+                  {aiPlan.loadAssessment && (
+                    <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+                      <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--c-text-3)', minWidth: 80 }}>Belastung</span>
+                      <span style={{ fontSize: 13, color: 'var(--c-text-2)', lineHeight: 1.4 }}>{aiPlan.loadAssessment}</span>
+                    </div>
+                  )}
+                  {(aiPlan.lastChangeReason || aiPlan.changeReason) && (
+                    <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+                      <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--c-text-3)', minWidth: 80 }}>Anpassung</span>
+                      <span style={{ fontSize: 13, color: 'var(--c-text-2)', lineHeight: 1.4 }}>{aiPlan.lastChangeReason || aiPlan.changeReason}</span>
+                    </div>
+                  )}
+                  {(() => {
+                    const dow = new Date().getDay() === 0 ? 6 : new Date().getDay() - 1
+                    const todaySession = aiPlan.sessions?.find(s => s.dayOfWeek === dow && !s.isNextWeek)
+                    if (!todaySession) return null
+                    return (
+                      <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+                        <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--c-text-3)', minWidth: 80 }}>Heute</span>
+                        <span style={{ fontSize: 13, color: 'var(--c-primary)', fontWeight: 600 }}>
+                          {todaySession.title || todaySession.type}
+                          {todaySession.pace ? ` · ${todaySession.pace}` : ''}
+                        </span>
+                      </div>
+                    )
+                  })()}
+                </div>
+              </div>
+            )}
 
             {/* Proactive alerts — shown prominently */}
             {proactiveAlerts.length > 0 && proactiveAlerts.map((alert, i) => (

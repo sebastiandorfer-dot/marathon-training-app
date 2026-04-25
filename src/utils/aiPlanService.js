@@ -163,6 +163,22 @@ export function shouldRegeneratePlan(newLog, workoutLogs, aiPlan, profile) {
     }
   }
 
+  // Consistent good training — progressively increase load after 3+ clean sessions
+  if (lastGen) {
+    const sessionsSinceLastGen = workoutLogs.filter(l =>
+      new Date(l.workout_date) >= lastGen && l.id !== newLog.id
+    )
+    if (sessionsSinceLastGen.length >= 2) {
+      // All recent sessions including current one are easy/good (RPE ≤ 2)
+      const recentRpe = [...sessionsSinceLastGen, newLog]
+        .map(l => l.rpe)
+        .filter(v => v != null)
+      if (recentRpe.length >= 2 && recentRpe.every(r => r <= 2)) {
+        return { should: true, reason: 'Konsistentes Training — Belastung wird progressiv angepasst' }
+      }
+    }
+  }
+
   return { should: false, reason: null }
 }
 
@@ -232,14 +248,22 @@ export async function generateAIPlan(profile, workoutLogs, stravaRuns = [], apiK
   const dayOfWeek = today.getDay() === 0 ? 6 : today.getDay() - 1 // 0=Mo ... 6=So
   const remainingDays = (profile.training_days || []).filter(d => d > dayOfWeek)
 
+  // Training goal label for prompt
+  const goalLabels = { finish: 'Erstmals finishen', pb: 'Persönliche Bestzeit verbessern', improve: 'Tempo verbessern' }
+  const goalLabel = profile.training_goal ? goalLabels[profile.training_goal] || profile.training_goal : null
+
   const prompt = `Du bist ein erfahrener Marathontrainer. Erstelle einen dynamisch angepassten Trainingsplan.
 
 ATHLETENPROFIL:
 - Level: ${profile.level || 'Einsteiger'}
 - Trainingstage: ${trainingDaysList || 'nicht angegeben'} (${profile.sessions_per_week || 3}x/Woche)
+- Terminflexibilität: ${profile.flexibility_mode === 'strict' ? 'Strikt — nur diese Tage, kein Training an anderen Tagen' : 'Flexibel — andere Tage möglich bei Bedarf'}
 - Zieltempo Marathon: ${profile.target_pace_min || '?'}:${String(profile.target_pace_sec || 0).padStart(2, '0')} min/km
 - Trainingsmodus: ${profile.training_mode || 'race'}
 ${profile.marathon_date ? `- Marathon: ${new Date(profile.marathon_date).toLocaleDateString('de-AT', { day: 'numeric', month: 'long', year: 'numeric' })} (${Math.ceil((new Date(profile.marathon_date) - new Date()) / (1000*60*60*24))} Tage)` : ''}
+${profile.current_weekly_km ? `- Aktuelles Wochenvolumen: ${profile.current_weekly_km} km/Woche` : ''}
+${profile.longest_recent_run_km ? `- Längster Lauf (letzte 4 Wochen): ${profile.longest_recent_run_km} km` : ''}
+${goalLabel ? `- Hauptziel: ${goalLabel}` : ''}
 ${profile.context ? `- Persönliche Notizen: ${profile.context}` : ''}
 
 TRAININGSBELASTUNG:
@@ -269,6 +293,7 @@ AUFGABE:
 Antworte NUR mit validem JSON (kein Markdown, keine Erklärung davor/danach):
 {
   "changeReason": "1-2 Sätze warum der Plan genau so aussieht (oder was angepasst wurde)",
+  "coachNote": "Kurze, persönliche Nachricht direkt an den Athleten — motivierend, ehrlich, max. 1 Satz. Wie ein echter Coach der mit dir spricht.",
   "weekTheme": "Thema der aktuellen Woche (z.B. Aerobe Basis, Erholungswoche, Tempowoche)",
   "currentWeekLoad": Zahl,
   "loadAssessment": "qualitative Einschätzung der Wochenbelastung in 1 Satz",
@@ -314,7 +339,12 @@ Antworte NUR mit validem JSON (kein Markdown, keine Erklärung davor/danach):
   const jsonMatch = text.match(/\{[\s\S]*\}/)
   if (!jsonMatch) throw new Error('Kein gültiges JSON in der Antwort')
 
-  const plan = JSON.parse(jsonMatch[0])
+  let plan
+  try {
+    plan = JSON.parse(jsonMatch[0])
+  } catch (parseErr) {
+    throw new Error(`Plan-JSON konnte nicht geparst werden: ${parseErr.message}`)
+  }
 
   return {
     ...plan,

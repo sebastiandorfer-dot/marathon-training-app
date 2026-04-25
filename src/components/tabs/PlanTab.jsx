@@ -37,7 +37,7 @@ const TYPE_LABELS = {
   hike: 'Wandern', strength: 'Krafttraining', yoga: 'Yoga', other: 'Sonstiges',
 }
 
-export default function PlanTab({ profile, trainingPlan, completedWorkoutIds, onToggleComplete, workoutLogs = [], stravaRuns = [], onProfileUpdate }) {
+export default function PlanTab({ profile, trainingPlan, completedWorkoutIds, onToggleComplete, workoutLogs = [], stravaRuns = [], onProfileUpdate, onTabChange }) {
   const trainingMode = profile.training_mode || 'race'
   const hasMarathon  = !!profile.marathon_date
 
@@ -75,7 +75,7 @@ export default function PlanTab({ profile, trainingPlan, completedWorkoutIds, on
     setToggling(null)
   }
 
-  // Tracking mode: no plan view
+  // Tracking mode: no plan view — redirect to useful tabs
   if (trainingMode === 'tracking') {
     return (
       <div className="screen">
@@ -83,12 +83,38 @@ export default function PlanTab({ profile, trainingPlan, completedWorkoutIds, on
           <h2 style={{ fontSize: '1.125rem' }}>Plan</h2>
         </div>
         <div className="screen-scroll">
-          <div className="screen-content" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: 300, gap: 'var(--sp-4)' }}>
+          <div className="screen-content" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: 320, gap: 'var(--sp-5)', padding: '0 var(--sp-5)' }}>
             <div style={{ fontSize: '3rem' }}>📊</div>
-            <h3 style={{ textAlign: 'center' }}>Kein Trainingsplan</h3>
-            <p style={{ textAlign: 'center', color: 'var(--c-text-2)', maxWidth: 280, fontSize: '0.9rem', lineHeight: 1.5 }}>
-              Im Tracking-Modus gibt es keinen vorgegebenen Plan. Logge dein Training im Heute-Tab und sieh deine Fortschritte im Fitness-Tab.
-            </p>
+            <div style={{ textAlign: 'center' }}>
+              <h3 style={{ marginBottom: 8 }}>Kein vorgegebener Plan</h3>
+              <p style={{ color: 'var(--c-text-2)', fontSize: '0.9rem', lineHeight: 1.6 }}>
+                Im Tracking-Modus trackst du dein eigenes Training. Logge Einheiten im Heute-Tab — der KI-Coach beobachtet Muster und gibt dir Feedback.
+              </p>
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10, width: '100%', maxWidth: 280 }}>
+              <button
+                onClick={() => onTabChange?.('today')}
+                style={{
+                  width: '100%', padding: '13px 0', borderRadius: 12,
+                  background: 'var(--c-primary)', color: '#fff',
+                  border: 'none', fontWeight: 700, fontSize: 15,
+                  cursor: 'pointer', fontFamily: 'var(--font)',
+                }}
+              >
+                Training eintragen →
+              </button>
+              <button
+                onClick={() => onTabChange?.('coach')}
+                style={{
+                  width: '100%', padding: '12px 0', borderRadius: 12,
+                  background: 'var(--c-card)', color: 'var(--c-text)',
+                  border: '1px solid var(--c-border)', fontWeight: 600, fontSize: 14,
+                  cursor: 'pointer', fontFamily: 'var(--font)',
+                }}
+              >
+                Zum KI-Coach
+              </button>
+            </div>
           </div>
         </div>
       </div>

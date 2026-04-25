@@ -48,9 +48,9 @@ export default function FitnessTab({ user, profile, onProfileUpdate, onRunsUpdat
     if (!workoutLogs || workoutLogs.length === 0) return 0
     const getWeekKey = (dateStr) => {
       const d = new Date(dateStr)
-      const sun = new Date(d)
-      sun.setDate(d.getDate() - d.getDay())
-      return sun.toISOString().split('T')[0]
+      const mon = new Date(d)
+      mon.setDate(d.getDate() - ((d.getDay() + 6) % 7)) // Monday-based, consistent with rest of app
+      return mon.toISOString().split('T')[0]
     }
     const weeksWithLogs = new Set(workoutLogs.map(l => getWeekKey(l.workout_date)))
     // If current week already has a log, start counting from it; else start from last week
@@ -102,8 +102,15 @@ export default function FitnessTab({ user, profile, onProfileUpdate, onRunsUpdat
           name: r.name,
         }))
         await supabase.from('strava_runs').upsert(rows, { onConflict: 'strava_id' })
-        setRuns(rows)
-        if (onRunsUpdate) onRunsUpdate(rows)
+        // Re-fetch ALL runs from DB so we don't lose historical data not in this sync batch
+        const { data: allRuns } = await supabase
+          .from('strava_runs')
+          .select('*')
+          .eq('user_id', user.id)
+          .order('start_date', { ascending: false })
+        const merged = allRuns || rows
+        setRuns(merged)
+        if (onRunsUpdate) onRunsUpdate(merged)
       }
 
       const now = new Date().toISOString()
@@ -122,7 +129,7 @@ export default function FitnessTab({ user, profile, onProfileUpdate, onRunsUpdat
   useEffect(() => {
     if (!isConnected || autoSyncRef.current) return
     const lastSyncTime = lastSync ? new Date(lastSync).getTime() : 0
-    if (Date.now() - lastSyncTime > 4 * 60 * 60 * 1000) {
+    if (Date.now() - lastSyncTime > 30 * 60 * 1000) {
       autoSyncRef.current = true
       handleSync()
     }
@@ -224,7 +231,7 @@ export default function FitnessTab({ user, profile, onProfileUpdate, onRunsUpdat
                   <div style={{ fontWeight: 600, fontSize: 14, color: 'var(--c-text)' }}>Strava verbunden</div>
                   {lastSync && (
                     <div style={{ fontSize: 12, color: 'var(--c-text-3)' }}>
-                      Letzter Sync: {new Date(lastSync).toLocaleDateString('de-AT', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
+                      Letzter Sync: {new Date(lastSync).toLocaleString('de-AT', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
                     </div>
                   )}
                 </div>
