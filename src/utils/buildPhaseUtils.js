@@ -91,26 +91,81 @@ export function hasConflict(day, type, schedule, prevWeekLastType = null) {
 
 /**
  * Distribute workout types onto available days:
- * - Easy runs first (most flexible), tempo next, long run always last
+ * - Long run always on the latest available day
+ * - Other sessions spread evenly using floor(i * m / n) spacing
+ *   so e.g. 2 easy runs across 6 days → Mon + Thu, not Mon + Tue
  * - No back-to-back hard sessions (cross-week aware)
- * - Long run: chronologically latest available day (Math.max)
  */
 export function smartPlace(types, days, existingSchedule = {}, prevWeekLastType = null) {
   const result = { ...existingSchedule }
+  if (!types.length || !days.length) return result
+
   const sorted = [...types].sort((a, b) => {
     if (a === 'long') return 1
     if (b === 'long') return -1
     return (HARDNESS[a] || 0) - (HARDNESS[b] || 0)
   })
-  for (const type of sorted) {
-    const free = days.filter(d => result[d] === undefined)
-    if (free.length === 0) break
-    const noConflict = free.filter(d => !hasConflict(d, type, result, prevWeekLastType))
-    const pool = noConflict.length > 0 ? noConflict : free
-    // Long run → latest possible day (chronological), others → earliest
-    const chosen = type === 'long' ? Math.max(...pool) : pool[0]
-    result[chosen] = type
+
+  const hasLong    = sorted.some(t => t === 'long')
+  const nonLong    = sorted.filter(t => t !== 'long')
+  const free       = days.filter(d => result[d] === undefined)
+
+  // ── Reserve the latest conflict-free day for the long run ──────
+  let longDay        = null
+  let daysForOthers  = [...free]
+
+  if (hasLong && free.length > 0) {
+    for (let i = free.length - 1; i >= 0; i--) {
+      if (!hasConflict(free[i], 'long', result, prevWeekLastType)) {
+        longDay = free[i]
+        break
+      }
+    }
+    if (longDay === null) longDay = free[free.length - 1]   // hard fallback
+    daysForOthers = free.filter(d => d !== longDay)
   }
+
+  // ── Spread non-long sessions evenly with floor(i * m / n) ──────
+  const n = nonLong.length
+  const m = daysForOthers.length
+  if (n > 0 && m > 0) {
+    // Build a de-duped list of target indices (handles edge case n > m)
+    const targetIdxSet = new Set()
+    for (let i = 0; i < n; i++) {
+      targetIdxSet.add(Math.min(Math.floor(i * m / n), m - 1))
+    }
+    // If collisions reduced the set, fill in remaining free slots
+    if (targetIdxSet.size < n) {
+      for (let i = 0; i < m && targetIdxSet.size < n; i++) targetIdxSet.add(i)
+    }
+    const targetDays = [...targetIdxSet].sort((a, b) => a - b).map(idx => daysForOthers[idx])
+
+    for (let i = 0; i < nonLong.length && i < targetDays.length; i++) {
+      const type = nonLong[i]
+      const pref = targetDays[i]
+
+      if (result[pref] === undefined && !hasConflict(pref, type, result, prevWeekLastType)) {
+        result[pref] = type
+      } else {
+        // Fall back to nearest conflict-free day, then any free day
+        const alt =
+          daysForOthers.find(d => result[d] === undefined && !hasConflict(d, type, result, prevWeekLastType)) ??
+          daysForOthers.find(d => result[d] === undefined)
+        if (alt !== undefined) result[alt] = type
+      }
+    }
+  }
+
+  // ── Place long run ─────────────────────────────────────────────
+  if (hasLong) {
+    if (longDay !== null && result[longDay] === undefined) {
+      result[longDay] = 'long'
+    } else {
+      const anyFree = free.find(d => result[d] === undefined)
+      if (anyFree !== undefined) result[anyFree] = 'long'
+    }
+  }
+
   return result
 }
 
@@ -188,7 +243,19 @@ export function initSchedule(profile, workoutLogs = []) {
     // 4. Session count must match desired
     const countMatches = storedWorkoutDays.length === desiredSessions
 
-    if (allOnValidDays && countMatches) return stored
+    // 5. Distribution quality: if 3+ sessions are clustered with 3+ consecutive
+    //    rest days in a row, the old algorithm generated this schedule — rebuild.
+    let poorlyDistributed = false
+    if (countMatches && storedWorkoutDays.length >= 3) {
+      const sorted = [...storedWorkoutDays].sort((a, b) => a - b)
+      let maxGap = 0
+      for (let i = 1; i < sorted.length; i++) {
+        maxGap = Math.max(maxGap, sorted[i] - sorted[i - 1] - 1)
+      }
+      if (maxGap >= 3) poorlyDistributed = true
+    }
+
+    if (allOnValidDays && countMatches && !poorlyDistributed) return stored
   }
   return buildBaseSchedule(profile, workoutLogs)
 }
