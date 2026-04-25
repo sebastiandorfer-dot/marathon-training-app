@@ -56,7 +56,7 @@ function useCoachIdentity(user) {
   return { coachName, firstName, avatarUrl }
 }
 
-export default function TodayTab({ user, profile, trainingPlan, completedWorkoutIds, onToggleComplete, workoutLogs, onLogAdded, onLogDeleted, stravaRuns = [], onConfirmRacePlan, aiPlan = null, aiPlanGenerating = false, lastPlanChange = null, onPlanChangeDismiss }) {
+export default function TodayTab({ user, profile, trainingPlan, completedWorkoutIds, onToggleComplete, workoutLogs, onLogAdded, onLogDeleted, stravaRuns = [], onConfirmRacePlan, aiPlan = null, aiPlanGenerating = false, lastPlanChange = null, onPlanChangeDismiss, pendingStravaFeedback = null, onStravaFeedback }) {
   const trainingMode = profile.training_mode || 'race'
   const hasMarathon = !!profile.marathon_date
 
@@ -209,6 +209,16 @@ export default function TodayTab({ user, profile, trainingPlan, completedWorkout
               aiPlan={aiPlan}
               triggerReason={lastPlanChange}
               onDismiss={onPlanChangeDismiss}
+            />
+          )}
+
+          {/* STRAVA FEEDBACK CARD — after auto-import, ask how the run felt */}
+          {pendingStravaFeedback && (
+            <StravaFeedbackCard
+              user={user}
+              run={pendingStravaFeedback.run}
+              onSubmit={onStravaFeedback}
+              onDismiss={() => onStravaFeedback(null, null)}
             />
           )}
 
@@ -975,6 +985,99 @@ function RaceDayCountdown({ daysLeft, marathonName }) {
           {config.sub}
         </div>
       </div>
+    </div>
+  )
+}
+
+// ── Strava Feedback Card ───────────────────────────────────────────────────────
+function StravaFeedbackCard({ user, run, onSubmit, onDismiss }) {
+  const { coachName, avatarUrl } = useCoachIdentity(user)
+  const [rpe, setRpe] = useState(null)
+  const [notes, setNotes] = useState('')
+  const [saving, setSaving] = useState(false)
+
+  const distKm   = (run.distance / 1000).toFixed(1)
+  const durMin   = Math.round(run.moving_time / 60)
+  const paceStr  = run.distance > 0
+    ? (() => { const s = Math.round(run.moving_time / (run.distance / 1000)); return `${Math.floor(s/60)}:${String(s%60).padStart(2,'0')}` })()
+    : null
+
+  async function handleSubmit() {
+    setSaving(true)
+    await onSubmit(rpe, notes.trim() || null)
+  }
+
+  const rpeLabels = ['😴','😌','🙂','💪','😤','🔥','💀']
+  const rpeValues = [1,   2,   4,   5,   7,   9,  10]
+
+  return (
+    <div style={{
+      background: 'var(--c-card)', border: '1px solid var(--c-primary)',
+      borderRadius: 14, padding: '16px', animation: 'fadeInDown 0.3s ease',
+    }}>
+      {/* Header */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
+        <div className="coach-avatar-pulse" style={{
+          width: 36, height: 36, borderRadius: '50%', overflow: 'hidden', flexShrink: 0,
+        }}>
+          <img src={avatarUrl} alt={coachName} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+        </div>
+        <div>
+          <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--c-primary)' }}>{coachName}</div>
+          <div style={{ fontSize: 13, color: 'var(--c-text)', fontWeight: 600 }}>
+            Strava-Lauf importiert 🎉
+          </div>
+        </div>
+        <button onClick={onDismiss} style={{ marginLeft: 'auto', background: 'none', border: 'none', color: 'var(--c-text-3)', fontSize: 18, cursor: 'pointer', lineHeight: 1 }}>×</button>
+      </div>
+
+      {/* Run summary */}
+      <div style={{
+        background: 'var(--c-bg)', borderRadius: 10, padding: '10px 14px',
+        display: 'flex', gap: 16, marginBottom: 14, fontSize: 13,
+      }}>
+        <span>🏃 <strong>{distKm} km</strong></span>
+        <span>⏱ <strong>{durMin} min</strong></span>
+        {paceStr && <span>⚡ <strong>{paceStr}/km</strong></span>}
+      </div>
+
+      {/* RPE question */}
+      <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--c-text-2)', marginBottom: 10 }}>
+        Wie war die Einheit?
+      </div>
+      <div style={{ display: 'flex', gap: 6, marginBottom: 14, flexWrap: 'wrap' }}>
+        {rpeLabels.map((label, i) => (
+          <button key={i} onClick={() => setRpe(rpeValues[i])} style={{
+            flex: 1, minWidth: 36, padding: '8px 4px', borderRadius: 8, fontSize: 18,
+            border: `2px solid ${rpe === rpeValues[i] ? 'var(--c-primary)' : 'var(--c-border)'}`,
+            background: rpe === rpeValues[i] ? 'var(--c-primary-dim)' : 'var(--c-bg)',
+            cursor: 'pointer', transition: 'all 0.15s',
+          }}>{label}</button>
+        ))}
+      </div>
+
+      {/* Optional notes */}
+      <textarea
+        placeholder="Notiz (optional) — z.B. Beine schwer, Hitze, super Gefühl…"
+        value={notes}
+        onChange={e => setNotes(e.target.value)}
+        rows={2}
+        style={{
+          width: '100%', background: 'var(--c-bg)', border: '1px solid var(--c-border)',
+          borderRadius: 8, padding: '8px 10px', fontSize: 13, color: 'var(--c-text)',
+          resize: 'none', outline: 'none', boxSizing: 'border-box', marginBottom: 12,
+          fontFamily: 'inherit',
+        }}
+      />
+
+      <button
+        onClick={handleSubmit}
+        disabled={saving}
+        className="btn-primary"
+        style={{ width: '100%', opacity: saving ? 0.6 : 1 }}
+      >
+        {saving ? 'Speichern…' : 'Speichern & Plan anpassen'}
+      </button>
     </div>
   )
 }

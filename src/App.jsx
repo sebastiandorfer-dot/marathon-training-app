@@ -39,6 +39,7 @@ export default function App() {
   const [lastPlanChange, setLastPlanChange] = useState(null) // reason shown as toast
   const aiPlanRef = useRef(null)       // mirrors aiPlan, avoids stale closures
   const workoutLogsRef = useRef([])    // mirrors workoutLogs, for AI check after upsert
+  const [pendingStravaFeedback, setPendingStravaFeedback] = useState(null) // {log, run} awaiting RPE
 
   // ── Boot: check auth session + Strava OAuth callback ─────────
   useEffect(() => {
@@ -428,6 +429,46 @@ export default function App() {
         .eq('user_id', currentProfile.id)
         .order('start_date', { ascending: false })
       const merged = allRuns || rows
+      // Find truly new runs (not yet in workoutLogs) — auto-log them
+      const existingStravaIds = new Set(
+        workoutLogsRef.current.map(l => l.notes).filter(Boolean)
+          .map(n => { const m = n.match(/strava:(\d+)/); return m ? m[1] : null })
+          .filter(Boolean)
+      )
+      const cutoff = Date.now() - 7 * 24 * 60 * 60 * 1000 // only last 7 days
+      const newRuns = runs.filter(r =>
+        new Date(r.start_date).getTime() > cutoff &&
+        !existingStravaIds.has(String(r.id))
+      )
+      let newestLog = null
+      for (const r of newRuns) {
+        const dateStr = r.start_date.slice(0, 10)
+        const distKm  = r.distance / 1000
+        const durMin  = Math.round(r.moving_time / 60)
+        const paceSecKm = distKm > 0 ? r.moving_time / distKm : null
+        // Guess workout type from pace
+        let wType = 'easy'
+        if (paceSecKm && paceSecKm < 270) wType = 'interval'
+        else if (paceSecKm && paceSecKm < 310) wType = 'tempo'
+        else if (distKm >= 18) wType = 'long'
+        const { data: inserted } = await supabase.from('workout_logs').insert({
+          user_id: currentProfile.id,
+          workout_date: dateStr,
+          workout_type: wType,
+          distance_km: parseFloat(distKm.toFixed(2)),
+          duration_min: durMin,
+          notes: `strava:${r.id}`,  // sentinel for dedup
+          rpe: null,
+        }).select().single()
+        if (inserted) {
+          workoutLogsRef.current = [inserted, ...workoutLogsRef.current]
+          setWorkoutLogs(prev => [inserted, ...prev])
+          if (!newestLog || new Date(r.start_date) > new Date(newestLog.run.start_date)) {
+            newestLog = { log: inserted, run: r }
+          }
+        }
+      }
+      if (newestLog) setPendingStravaFeedback(newestLog)
       setStravaRuns(merged)
       const now = new Date().toISOString()
       await supabase.from('profiles').update({ strava_last_sync: now }).eq('id', currentProfile.id)
@@ -553,6 +594,27 @@ export default function App() {
               aiPlanGenerating={aiPlanGenerating}
               lastPlanChange={lastPlanChange}
               onPlanChangeDismiss={() => setLastPlanChange(null)}
+              pendingStravaFeedback={pendingStravaFeedback}
+              onStravaFeedback={async (rpe, notes) => {
+                if (!pendingStravaFeedback) return
+                const { log } = pendingStravaFeedback
+                const { data: updated } = await supabase
+                  .from('workout_logs').update({ rpe, notes: notes || log.notes })
+                  .eq('id', log.id).select().single()
+                if (updated) {
+                  workoutLogsRef.current = workoutLogsRef.current.map(l => l.id === updated.id ? updated : l)
+                  setWorkoutLogs(prev => prev.map(l => l.id === updated.id ? updated : l))
+                  const apiKey = import.meta.env.VITE_ANTHROPIC_API_KEY
+                  if (apiKey && profile) {
+                    generateAIPlan(profile, workoutLogsRef.current, stravaRuns, apiKey)
+                      .then(plan => {
+                        const enriched = { ...plan, lastChangeReason: 'Einheit bewertet — Plan angepasst' }
+                        setAiPlan(enriched); aiPlanRef.current = enriched
+                      }).catch(() => {})
+                  }
+                }
+                setPendingStravaFeedback(null)
+              }}
             />
           )}
           {activeTab === 'plan' && (
