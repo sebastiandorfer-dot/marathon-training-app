@@ -244,13 +244,15 @@ export function initSchedule(profile, workoutLogs = []) {
     const countMatches = storedWorkoutDays.length === desiredSessions
 
     // 5. Distribution quality: if 3+ sessions are clustered with 3+ consecutive
-    //    rest days in a row, the old algorithm generated this schedule — rebuild.
+    //    rest days in a row, AND there is enough slack in training_days to spread
+    //    them better, rebuild. Skip if activeDays.length <= sessionCount (no slack).
     let poorlyDistributed = false
-    if (countMatches && storedWorkoutDays.length >= 3) {
-      const sorted = [...storedWorkoutDays].sort((a, b) => a - b)
+    const canSpreadBetter = activeDays.length > desiredSessions
+    if (countMatches && canSpreadBetter && storedWorkoutDays.length >= 3) {
+      const sortedDays = [...storedWorkoutDays].sort((a, b) => a - b)
       let maxGap = 0
-      for (let i = 1; i < sorted.length; i++) {
-        maxGap = Math.max(maxGap, sorted[i] - sorted[i - 1] - 1)
+      for (let i = 1; i < sortedDays.length; i++) {
+        maxGap = Math.max(maxGap, sortedDays[i] - sortedDays[i - 1] - 1)
       }
       if (maxGap >= 3) poorlyDistributed = true
     }

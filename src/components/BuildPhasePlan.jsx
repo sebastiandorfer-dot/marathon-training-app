@@ -71,7 +71,7 @@ function rebuildAfterEdit(changedDay, newType, profile) {
     ...(newType !== 'rest' && !blocked.includes(changedDay) ? [changedDay] : []),
   ])].sort()
 
-  const types = getWeeklyTypes(allActive.length)
+  const types = getWeeklyTypes(allActive.length, profile.level || 'intermediate')
 
   // Remove the chosen type from the distribution (already placed)
   const remaining = [...types]
@@ -198,15 +198,16 @@ export default function BuildPhasePlan({ profile, stravaRuns = [], workoutLogs =
   const [schedule, setSchedule]     = useState(() => initSchedule(profile, workoutLogs))
   const [scheduleEditing, setScheduleEditing] = useState(false)
 
-  // Re-initialize schedule when profile training settings change (e.g. after ProfileTab save).
-  // Use .join(',') instead of JSON.stringify so we compare by content without creating new
-  // object references on every render — avoids unnecessary re-runs when the array is recreated.
+  // Re-initialize schedule when profile training settings or workout data changes.
+  // Use stable string keys to avoid infinite loops from array reference churn.
   const trainingDaysKey = (profile.training_days || []).join(',')
   const blockedDaysKey  = (profile.blocked_days  || []).join(',')
+  // Track workoutLogs length + last log id so schedule reacts to new logs (fatigue update)
+  const workoutLogsKey  = `${workoutLogs.length}:${workoutLogs[0]?.id ?? ''}`
   useEffect(() => {
     setSchedule(initSchedule(profile, workoutLogs))
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [profile.schedule_since, profile.sessions_per_week, trainingDaysKey, blockedDaysKey])
+  }, [profile.schedule_since, profile.sessions_per_week, trainingDaysKey, blockedDaysKey, workoutLogsKey])
   const [saving, setSaving]         = useState(false)
 
   // ── Derived values ─────────────────────────────────────────────

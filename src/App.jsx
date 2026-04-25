@@ -186,16 +186,8 @@ export default function App() {
             .map(l => l.notes?.match(/strava:(\d+)/)?.[1])
             .filter(Boolean)
         )
-        // Also index logs by date to avoid double-logging same day manually + strava
-        const loggedDates = new Set(existingLogs.map(l => l.workout_date))
-
         const toInsert = stravaRunsData
           .filter(r => !loggedIds.has(String(r.strava_id)))
-          .filter(r => {
-            const dateStr = r.start_date.slice(0, 10)
-            // Allow strava import even if date exists — only block if already strava-sourced
-            return !loggedIds.has(String(r.strava_id))
-          })
 
         if (toInsert.length > 0) {
           const newRows = toInsert.map(r => {
@@ -726,20 +718,23 @@ export default function App() {
               pendingStravaFeedback={pendingStravaFeedback}
               onStravaFeedback={async (rpe, notes) => {
                 if (!pendingStravaFeedback) return
-                const { log } = pendingStravaFeedback
-                const { data: updated } = await supabase
-                  .from('workout_logs').update({ rpe, notes: notes || log.notes })
-                  .eq('id', log.id).select().single()
-                if (updated) {
-                  workoutLogsRef.current = workoutLogsRef.current.map(l => l.id === updated.id ? updated : l)
-                  setWorkoutLogs(prev => prev.map(l => l.id === updated.id ? updated : l))
-                  const apiKey = import.meta.env.VITE_ANTHROPIC_API_KEY
-                  if (apiKey && profile) {
-                    generateAIPlan(profile, workoutLogsRef.current, stravaRuns, apiKey)
-                      .then(plan => {
-                        const enriched = { ...plan, lastChangeReason: 'Einheit bewertet — Plan angepasst' }
-                        setAiPlan(enriched); aiPlanRef.current = enriched
-                      }).catch(() => {})
+                // rpe=null means the user dismissed — just clear the card, no DB write
+                if (rpe != null) {
+                  const { log } = pendingStravaFeedback
+                  const { data: updated } = await supabase
+                    .from('workout_logs').update({ rpe, notes: notes || log.notes })
+                    .eq('id', log.id).select().single()
+                  if (updated) {
+                    workoutLogsRef.current = workoutLogsRef.current.map(l => l.id === updated.id ? updated : l)
+                    setWorkoutLogs(prev => prev.map(l => l.id === updated.id ? updated : l))
+                    const apiKey = import.meta.env.VITE_ANTHROPIC_API_KEY
+                    if (apiKey && profile) {
+                      generateAIPlan(profile, workoutLogsRef.current, stravaRuns, apiKey)
+                        .then(plan => {
+                          const enriched = { ...plan, lastChangeReason: 'Einheit bewertet — Plan angepasst' }
+                          setAiPlan(enriched); aiPlanRef.current = enriched
+                        }).catch(() => {})
+                    }
                   }
                 }
                 setPendingStravaFeedback(null)
