@@ -692,6 +692,7 @@ export default function App() {
               stravaRuns={stravaRuns}
               onTabChange={setActiveTab}
               onProfileUpdate={handleProfileUpdate}
+              onLogAdded={handleLogAdded}
               aiPlan={aiPlan}
             />
           )}

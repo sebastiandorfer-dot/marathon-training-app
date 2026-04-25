@@ -256,7 +256,7 @@ const MILESTONE_OPTIONS = [
   },
 ]
 
-export default function BuildPhasePlan({ profile, stravaRuns = [], workoutLogs = [], onProfileUpdate, weekOffset: weekOffsetProp, onWeekOffsetChange, aiPlan = null }) {
+export default function BuildPhasePlan({ profile, stravaRuns = [], workoutLogs = [], onProfileUpdate, onLogAdded, weekOffset: weekOffsetProp, onWeekOffsetChange, aiPlan = null }) {
   const trainingMode    = profile.training_mode || 'race'
   const hasMarathon     = !!profile.marathon_date
   const daysToRacePlan  = hasMarathon ? daysUntilRacePlan(profile.marathon_date) : null
@@ -402,6 +402,23 @@ export default function BuildPhasePlan({ profile, stravaRuns = [], workoutLogs =
   function cancelEdit() {
     setSchedule(initSchedule(profile, workoutLogs))
     setScheduleEditing(false)
+  }
+
+  // Mark a missed day as voluntary rest — inserts a 'rest' log so it no longer shows as missed
+  const [markingRest, setMarkingRest] = useState(null) // dayIdx being saved
+  async function markVoluntaryRest(dayIdx, date) {
+    setMarkingRest(dayIdx)
+    try {
+      const dateStr = date.toISOString().split('T')[0]
+      const { data, error } = await supabase.from('workout_logs').insert({
+        user_id:      profile.id,
+        workout_date: dateStr,
+        workout_type: 'rest',
+        notes:        'Freiwilliger Ruhetag',
+      }).select().single()
+      if (!error && data && onLogAdded) onLogAdded(data)
+    } catch (e) { console.error(e) }
+    finally { setMarkingRest(null) }
   }
 
   async function toggleMilestone(id) {
@@ -633,6 +650,30 @@ export default function BuildPhasePlan({ profile, stravaRuns = [], workoutLogs =
                   aiSessionByDay[dayIdx] &&
                   (aiSessionByDay[dayIdx].structure || aiSessionByDay[dayIdx].tip || aiSessionByDay[dayIdx].pace) && (
                   <AIDayDetail session={aiSessionByDay[dayIdx]} meta={meta} />
+                )}
+
+                {/* Voluntary rest strip — only on missed past days */}
+                {isMissed && !logged && !scheduleEditing && onLogAdded && (
+                  <div style={{
+                    borderTop: '1px solid var(--c-border)',
+                    padding: '7px 14px',
+                    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                  }}>
+                    <span style={{ fontSize: 11, color: 'var(--c-text-3)' }}>Geplantes Training verpasst?</span>
+                    <button
+                      onClick={() => markVoluntaryRest(dayIdx, date)}
+                      disabled={markingRest === dayIdx}
+                      style={{
+                        background: 'none', border: '1px solid var(--c-border)',
+                        borderRadius: 8, padding: '3px 10px', cursor: 'pointer',
+                        fontSize: 12, color: 'var(--c-text-2)', fontFamily: 'var(--font)',
+                        fontWeight: 600, transition: 'all 0.15s',
+                        opacity: markingRest === dayIdx ? 0.5 : 1,
+                      }}
+                    >
+                      {markingRest === dayIdx ? '…' : '💤 War Ruhetag'}
+                    </button>
+                  </div>
                 )}
 
                 {/* Edit mode: type picker */}

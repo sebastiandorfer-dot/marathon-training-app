@@ -226,6 +226,20 @@ export async function generateAIPlan(profile, workoutLogs, stravaRuns = [], apiK
     `${l.workout_date}: ${l.workout_type}${l.distance_km ? ` ${l.distance_km}km` : ''}${l.duration_min ? ` ${l.duration_min}min` : ''}${l.rpe ? ` (RPE ${l.rpe}/10)` : ''}${l.pace_feedback ? ` [Pace: ${PACE_FB_LABELS[l.pace_feedback] || l.pace_feedback}]` : ''}${l.notes && !l.notes.startsWith('strava:') ? ` — "${l.notes}"` : ''}`
   ).join('\n')
 
+  // Voluntary rest count — logs with notes='Freiwilliger Ruhetag' in last 4 weeks
+  const fourWeeksAgo = new Date(); fourWeeksAgo.setDate(fourWeeksAgo.getDate() - 28)
+  const voluntaryRestCount = workoutLogs.filter(l =>
+    l.workout_type === 'rest' &&
+    l.notes === 'Freiwilliger Ruhetag' &&
+    new Date(l.workout_date) >= fourWeeksAgo
+  ).length
+
+  // Missed sessions — logged with 'rest' but had planned training (rough proxy: missed = no log on a training day in last 4 weeks)
+  // We surface voluntary rest days directly; true misses are inferred from the gap in logs
+  const voluntaryRestNote = voluntaryRestCount > 0
+    ? `Bewusste Ruhetage (letzte 4 Wochen): ${voluntaryRestCount} (Athlet hat aktiv pausiert, kein Übertraining)`
+    : null
+
   // Pace feedback summary for hard sessions
   const paceFeedbackLogs = recentLogs.filter(l => l.pace_feedback && (l.workout_type === 'tempo' || l.workout_type === 'interval'))
   const paceFeedbackText = paceFeedbackLogs.length > 0
@@ -284,6 +298,7 @@ TRAININGSBELASTUNG:
 - Ø letzte 4 Wochen: ${prev4AvgLoad.toFixed(1)}
 - Veränderung: ${prev4AvgLoad > 0 ? (((currentWeekLoad - prev4AvgLoad) / prev4AvgLoad) * 100).toFixed(0) + '%' : 'keine Vergleichsdaten'}
 ${hasPause ? `- ⚠️ PAUSE ERKANNT: ${pauseDays} Tage ohne Training — sanfterer Wiedereinstieg nötig` : ''}
+${voluntaryRestNote ? `- ℹ️ ${voluntaryRestNote}` : ''}
 
 LETZTE EINHEITEN:
 ${logsText || 'Noch keine Einheiten geloggt'}

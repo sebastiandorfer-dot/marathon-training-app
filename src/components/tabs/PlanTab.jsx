@@ -37,7 +37,7 @@ const TYPE_LABELS = {
   hike: 'Wandern', strength: 'Krafttraining', yoga: 'Yoga', other: 'Sonstiges',
 }
 
-export default function PlanTab({ profile, trainingPlan, completedWorkoutIds, onToggleComplete, workoutLogs = [], stravaRuns = [], onProfileUpdate, onTabChange, aiPlan = null }) {
+export default function PlanTab({ profile, trainingPlan, completedWorkoutIds, onToggleComplete, workoutLogs = [], stravaRuns = [], onProfileUpdate, onTabChange, aiPlan = null, onLogAdded }) {
   const trainingMode = profile.training_mode || 'race'
   const hasMarathon  = !!profile.marathon_date
 
@@ -200,6 +200,7 @@ export default function PlanTab({ profile, trainingPlan, completedWorkoutIds, on
               stravaRuns={stravaRuns}
               workoutLogs={workoutLogs}
               onProfileUpdate={onProfileUpdate}
+              onLogAdded={onLogAdded}
               weekOffset={buildWeekOffset}
               onWeekOffsetChange={setBuildWeekOffset}
               aiPlan={aiPlan}
