@@ -142,13 +142,74 @@ export default function App() {
 
       if (planRes.data) setTrainingPlan(planRes.data)
       if (completionsRes.data) setCompletedWorkoutIds(completionsRes.data.map(c => c.workout_id))
-      if (logsRes.data) { setWorkoutLogs(logsRes.data); workoutLogsRef.current = logsRes.data }
       if (chatRes.data) setChatMessages(chatRes.data)
       if (runsRes.data) setStravaRuns(runsRes.data)
 
+      // ── Bridge: auto-import Strava runs into workout_logs ─────────────────
+      const existingLogs = logsRes.data || []
+      const stravaRunsData = runsRes.data || []
+      let mergedLogs = existingLogs
+
+      if (stravaRunsData.length > 0) {
+        // Find which strava_run strava_ids already have a log (via notes sentinel)
+        const loggedIds = new Set(
+          existingLogs
+            .map(l => l.notes?.match(/strava:(\d+)/)?.[1])
+            .filter(Boolean)
+        )
+        // Also index logs by date to avoid double-logging same day manually + strava
+        const loggedDates = new Set(existingLogs.map(l => l.workout_date))
+
+        const toInsert = stravaRunsData
+          .filter(r => !loggedIds.has(String(r.strava_id)))
+          .filter(r => {
+            const dateStr = r.start_date.slice(0, 10)
+            // Allow strava import even if date exists — only block if already strava-sourced
+            return !loggedIds.has(String(r.strava_id))
+          })
+
+        if (toInsert.length > 0) {
+          const newRows = toInsert.map(r => {
+            const distKm = r.distance / 1000
+            const paceSecKm = distKm > 0 ? r.moving_time / distKm : null
+            let wType = 'easy'
+            if (paceSecKm && paceSecKm < 270) wType = 'interval'
+            else if (paceSecKm && paceSecKm < 310) wType = 'tempo'
+            else if (distKm >= 18) wType = 'long'
+            return {
+              user_id: authUser.id,
+              workout_date: r.start_date.slice(0, 10),
+              workout_type: wType,
+              distance_km: parseFloat(distKm.toFixed(2)),
+              duration_min: Math.round(r.moving_time / 60),
+              notes: `strava:${r.strava_id}`,
+              rpe: null,
+            }
+          })
+
+          const { data: inserted } = await supabase
+            .from('workout_logs')
+            .insert(newRows)
+            .select()
+
+          if (inserted?.length) {
+            mergedLogs = [...existingLogs, ...inserted]
+              .sort((a, b) => new Date(b.workout_date) - new Date(a.workout_date))
+            // Show feedback prompt for the most recent newly imported run
+            const newestRun = toInsert.sort((a, b) =>
+              new Date(b.start_date) - new Date(a.start_date))[0]
+            const newestLog = inserted.find(l => l.notes === `strava:${newestRun.strava_id}`)
+            if (newestLog) setPendingStravaFeedback({ log: newestLog, run: newestRun })
+          }
+        }
+      }
+
+      setWorkoutLogs(mergedLogs)
+      workoutLogsRef.current = mergedLogs
+
       // Generate initial AI plan in the background (non-blocking)
       const apiKey = import.meta.env.VITE_ANTHROPIC_API_KEY
-      const logs = logsRes.data || []
+      const logs = mergedLogs
       const runs = runsRes.data || []
       if (apiKey && activeProfile) {
         const { should } = shouldRegeneratePlan(null, logs, null, activeProfile)
@@ -381,12 +442,50 @@ export default function App() {
     )
   }, [])
 
-  // ── Update Strava runs + trigger AI plan regen with new data ──
-  const handleRunsUpdate = useCallback((newRuns) => {
+  // ── Update Strava runs: auto-log new runs + trigger AI regen ──
+  const handleRunsUpdate = useCallback(async (newRuns) => {
     setStravaRuns(newRuns)
+
+    // Auto-import any new runs that aren't in workout_logs yet
+    const loggedIds = new Set(
+      workoutLogsRef.current
+        .map(l => l.notes?.match(/strava:(\d+)/)?.[1])
+        .filter(Boolean)
+    )
+    const toInsert = newRuns.filter(r => !loggedIds.has(String(r.strava_id)))
+    if (toInsert.length > 0) {
+      const newRows = toInsert.map(r => {
+        const distKm = r.distance / 1000
+        const paceSecKm = distKm > 0 ? r.moving_time / distKm : null
+        let wType = 'easy'
+        if (paceSecKm && paceSecKm < 270) wType = 'interval'
+        else if (paceSecKm && paceSecKm < 310) wType = 'tempo'
+        else if (distKm >= 18) wType = 'long'
+        return {
+          user_id: profile?.id,
+          workout_date: r.start_date.slice(0, 10),
+          workout_type: wType,
+          distance_km: parseFloat(distKm.toFixed(2)),
+          duration_min: Math.round(r.moving_time / 60),
+          notes: `strava:${r.strava_id}`,
+          rpe: null,
+        }
+      })
+      const { data: inserted } = await supabase.from('workout_logs').insert(newRows).select()
+      if (inserted?.length) {
+        const merged = [...workoutLogsRef.current, ...inserted]
+          .sort((a, b) => new Date(b.workout_date) - new Date(a.workout_date))
+        workoutLogsRef.current = merged
+        setWorkoutLogs(merged)
+        // Prompt feedback for newest run
+        const newestRun = toInsert.sort((a, b) => new Date(b.start_date) - new Date(a.start_date))[0]
+        const newestLog = inserted.find(l => l.notes === `strava:${newestRun.strava_id}`)
+        if (newestLog) setPendingStravaFeedback({ log: newestLog, run: newestRun })
+      }
+    }
+
     const apiKey = import.meta.env.VITE_ANTHROPIC_API_KEY
     if (!apiKey || !profile) return
-    // Regenerate AI plan with newly synced Strava data
     setAiPlanGenerating(true)
     generateAIPlan(profile, workoutLogsRef.current, newRuns, apiKey)
       .then(plan => {
