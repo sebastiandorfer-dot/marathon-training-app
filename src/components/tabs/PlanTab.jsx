@@ -60,6 +60,8 @@ export default function PlanTab({ profile, trainingPlan, completedWorkoutIds, on
   const [viewWeek, setViewWeek] = useState(currentWeek)
   const [expandedId, setExpandedId] = useState(null)
   const [toggling, setToggling] = useState(null)
+  // Lifted from BuildPhasePlan so week offset survives tab switches
+  const [buildWeekOffset, setBuildWeekOffset] = useState(0)
 
   const weekData = trainingPlan?.plan_data?.weeks?.find(w => w.week === viewWeek)
 
@@ -198,6 +200,8 @@ export default function PlanTab({ profile, trainingPlan, completedWorkoutIds, on
               stravaRuns={stravaRuns}
               workoutLogs={workoutLogs}
               onProfileUpdate={onProfileUpdate}
+              weekOffset={buildWeekOffset}
+              onWeekOffsetChange={setBuildWeekOffset}
             />
           )}
           {!buildPhase && <WeeklyPlanView

@@ -15,7 +15,7 @@ import PlanTab from './components/tabs/PlanTab'
 import CoachTab from './components/tabs/CoachTab'
 import ProfileTab from './components/tabs/ProfileTab'
 import FitnessTab from './components/tabs/FitnessTab'
-import { exchangeStravaCode, getValidToken, fetchAllStravaRuns } from './utils/stravaUtils'
+import { exchangeStravaCode, getValidToken, fetchAllStravaRuns, makeStravaLogRow, filterNewStravaRuns } from './utils/stravaUtils'
 
 // Views: 'loading' | 'auth' | 'onboarding' | 'generating' | 'app'
 export default function App() {
@@ -179,50 +179,19 @@ export default function App() {
       const stravaRunsData = runsRes.data || []
       let mergedLogs = existingLogs
 
-      if (stravaRunsData.length > 0) {
-        // Find which strava_run strava_ids already have a log (via notes sentinel)
-        const loggedIds = new Set(
-          existingLogs
-            .map(l => l.notes?.match(/strava:(\d+)/)?.[1])
-            .filter(Boolean)
-        )
-        const toInsert = stravaRunsData
-          .filter(r => !loggedIds.has(String(r.strava_id)))
-
-        if (toInsert.length > 0) {
-          const newRows = toInsert.map(r => {
-            const distKm = r.distance / 1000
-            const paceSecKm = distKm > 0 ? r.moving_time / distKm : null
-            let wType = 'easy'
-            if (paceSecKm && paceSecKm < 270) wType = 'interval'
-            else if (paceSecKm && paceSecKm < 310) wType = 'tempo'
-            else if (distKm >= 18) wType = 'long'
-            return {
-              user_id: authUser.id,
-              workout_date: r.start_date.slice(0, 10),
-              workout_type: wType,
-              distance_km: parseFloat(distKm.toFixed(2)),
-              duration_min: Math.round(r.moving_time / 60),
-              notes: `strava:${r.strava_id}`,
-              rpe: null,
-            }
-          })
-
-          const { data: inserted, error: insertError } = await supabase
-            .from('workout_logs')
-            .insert(newRows)
-            .select()
-
-          if (insertError) console.warn('Strava→workout_logs bridge failed:', insertError)
-          if (inserted?.length) {
-            mergedLogs = [...existingLogs, ...inserted]
-              .sort((a, b) => new Date(b.workout_date) - new Date(a.workout_date))
-            // Show feedback prompt for the most recent newly imported run
-            const newestRun = toInsert.sort((a, b) =>
-              new Date(b.start_date) - new Date(a.start_date))[0]
-            const newestLog = inserted.find(l => l.notes === `strava:${newestRun.strava_id}`)
-            if (newestLog) setPendingStravaFeedback({ log: newestLog, run: newestRun })
-          }
+      const toInsert = filterNewStravaRuns(stravaRunsData, existingLogs)
+      if (toInsert.length > 0) {
+        const newRows = toInsert.map(r => makeStravaLogRow(r, authUser.id))
+        const { data: inserted, error: insertError } = await supabase
+          .from('workout_logs').insert(newRows).select()
+        if (insertError) console.warn('Strava→workout_logs bridge failed:', insertError)
+        if (inserted?.length) {
+          mergedLogs = [...existingLogs, ...inserted]
+            .sort((a, b) => new Date(b.workout_date) - new Date(a.workout_date))
+          const newestRun = [...toInsert].sort((a, b) =>
+            new Date(b.start_date) - new Date(a.start_date))[0]
+          const newestLog = inserted.find(l => l.notes === `strava:${newestRun.strava_id}`)
+          if (newestLog) setPendingStravaFeedback({ log: newestLog, run: newestRun })
         }
       }
 
@@ -469,38 +438,16 @@ export default function App() {
     setStravaRuns(newRuns)
 
     // Auto-import any new runs that aren't in workout_logs yet
-    const loggedIds = new Set(
-      workoutLogsRef.current
-        .map(l => l.notes?.match(/strava:(\d+)/)?.[1])
-        .filter(Boolean)
-    )
-    const toInsert = newRuns.filter(r => !loggedIds.has(String(r.strava_id)))
+    const toInsert = filterNewStravaRuns(newRuns, workoutLogsRef.current)
     if (toInsert.length > 0) {
-      const newRows = toInsert.map(r => {
-        const distKm = r.distance / 1000
-        const paceSecKm = distKm > 0 ? r.moving_time / distKm : null
-        let wType = 'easy'
-        if (paceSecKm && paceSecKm < 270) wType = 'interval'
-        else if (paceSecKm && paceSecKm < 310) wType = 'tempo'
-        else if (distKm >= 18) wType = 'long'
-        return {
-          user_id: profile?.id,
-          workout_date: r.start_date.slice(0, 10),
-          workout_type: wType,
-          distance_km: parseFloat(distKm.toFixed(2)),
-          duration_min: Math.round(r.moving_time / 60),
-          notes: `strava:${r.strava_id}`,
-          rpe: null,
-        }
-      })
+      const newRows = toInsert.map(r => makeStravaLogRow(r, profile?.id))
       const { data: inserted } = await supabase.from('workout_logs').insert(newRows).select()
       if (inserted?.length) {
         const merged = [...workoutLogsRef.current, ...inserted]
           .sort((a, b) => new Date(b.workout_date) - new Date(a.workout_date))
         workoutLogsRef.current = merged
         setWorkoutLogs(merged)
-        // Prompt feedback for newest run
-        const newestRun = toInsert.sort((a, b) => new Date(b.start_date) - new Date(a.start_date))[0]
+        const newestRun = [...toInsert].sort((a, b) => new Date(b.start_date) - new Date(a.start_date))[0]
         const newestLog = inserted.find(l => l.notes === `strava:${newestRun.strava_id}`)
         if (newestLog) setPendingStravaFeedback({ log: newestLog, run: newestRun })
       }
@@ -551,36 +498,13 @@ export default function App() {
         .order('start_date', { ascending: false })
       const merged = allRuns || rows
       // Find truly new runs (not yet in workoutLogs) — auto-log them
-      const existingStravaIds = new Set(
-        workoutLogsRef.current.map(l => l.notes).filter(Boolean)
-          .map(n => { const m = n.match(/strava:(\d+)/); return m ? m[1] : null })
-          .filter(Boolean)
-      )
       const cutoff = Date.now() - 7 * 24 * 60 * 60 * 1000 // only last 7 days
-      const newRuns = runs.filter(r =>
-        new Date(r.start_date).getTime() > cutoff &&
-        !existingStravaIds.has(String(r.id))
-      )
+      const recentRuns = runs.filter(r => new Date(r.start_date).getTime() > cutoff)
+      const newRuns = filterNewStravaRuns(recentRuns, workoutLogsRef.current)
       let newestLog = null
       for (const r of newRuns) {
-        const dateStr = r.start_date.slice(0, 10)
-        const distKm  = r.distance / 1000
-        const durMin  = Math.round(r.moving_time / 60)
-        const paceSecKm = distKm > 0 ? r.moving_time / distKm : null
-        // Guess workout type from pace
-        let wType = 'easy'
-        if (paceSecKm && paceSecKm < 270) wType = 'interval'
-        else if (paceSecKm && paceSecKm < 310) wType = 'tempo'
-        else if (distKm >= 18) wType = 'long'
-        const { data: inserted } = await supabase.from('workout_logs').insert({
-          user_id: currentProfile.id,
-          workout_date: dateStr,
-          workout_type: wType,
-          distance_km: parseFloat(distKm.toFixed(2)),
-          duration_min: durMin,
-          notes: `strava:${r.id}`,  // sentinel for dedup
-          rpe: null,
-        }).select().single()
+        const row = makeStravaLogRow(r, currentProfile.id)
+        const { data: inserted } = await supabase.from('workout_logs').insert(row).select().single()
         if (inserted) {
           workoutLogsRef.current = [inserted, ...workoutLogsRef.current]
           setWorkoutLogs(prev => [inserted, ...prev])
@@ -771,7 +695,7 @@ export default function App() {
               profile={profile}
               onProfileUpdate={handleProfileUpdate}
               onRunsUpdate={handleRunsUpdate}
-              workoutLogs={workoutLogs}
+              workoutLogs={allWorkoutLogs}
             />
           )}
           {activeTab === 'profile' && (

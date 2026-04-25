@@ -345,7 +345,7 @@ export default function BuildPhaseToday({
         }}>
         <div style={{ width: 36, height: 36, borderRadius: 10, flexShrink: 0, background: logOpen ? 'rgba(255,255,255,0.2)' : 'var(--c-primary-dim)', border: `1px solid ${logOpen ? 'rgba(255,255,255,0.3)' : 'var(--c-primary)'}`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1.1rem' }}>➕</div>
         <div style={{ flex: 1, textAlign: 'left' }}>
-          <div style={{ fontWeight: 700, fontSize: 15, color: logOpen ? '#fff' : 'var(--c-text)' }}>Sport eintragen</div>
+          <div style={{ fontWeight: 700, fontSize: 15, color: logOpen ? '#fff' : 'var(--c-text)' }}>{alreadyLogged ? 'Weiteres eintragen' : 'Sport eintragen'}</div>
           <div style={{ fontSize: 12, color: logOpen ? 'rgba(255,255,255,0.7)' : 'var(--c-text-3)' }}>Lauf, Radfahren, Schwimmen …</div>
         </div>
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={logOpen ? '#fff' : 'var(--c-text-3)'} strokeWidth="2.5" strokeLinecap="round" style={{ transition: 'transform 0.2s', transform: logOpen ? 'rotate(180deg)' : 'none' }}>

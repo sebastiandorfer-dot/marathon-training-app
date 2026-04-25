@@ -178,7 +178,7 @@ const MILESTONE_OPTIONS = [
   },
 ]
 
-export default function BuildPhasePlan({ profile, stravaRuns = [], workoutLogs = [], onProfileUpdate }) {
+export default function BuildPhasePlan({ profile, stravaRuns = [], workoutLogs = [], onProfileUpdate, weekOffset: weekOffsetProp, onWeekOffsetChange }) {
   const trainingMode    = profile.training_mode || 'race'
   const hasMarathon     = !!profile.marathon_date
   const daysToRacePlan  = hasMarathon ? daysUntilRacePlan(profile.marathon_date) : null
@@ -194,7 +194,10 @@ export default function BuildPhasePlan({ profile, stravaRuns = [], workoutLogs =
     return Array.isArray(stored) && stored.length > 0 ? stored : ['weekly_km', 'consistency']
   })
   const [milestoneEditing, setMilestoneEditing] = useState(false)
-  const [weekOffset, setWeekOffset] = useState(0)
+  // weekOffset is lifted to PlanTab when the parent provides weekOffsetProp/onWeekOffsetChange
+  const [localWeekOffset, setLocalWeekOffset] = useState(0)
+  const weekOffset    = weekOffsetProp !== undefined ? weekOffsetProp : localWeekOffset
+  const setWeekOffset = onWeekOffsetChange ?? setLocalWeekOffset
   const [schedule, setSchedule]     = useState(() => initSchedule(profile, workoutLogs))
   const [scheduleEditing, setScheduleEditing] = useState(false)
 
@@ -290,11 +293,16 @@ export default function BuildPhasePlan({ profile, stravaRuns = [], workoutLogs =
   }
 
   async function toggleMilestone(id) {
-    setSelectedMilestones(prev => {
-      const next = prev.includes(id) ? prev.filter(m => m !== id) : [...prev, id]
-      supabase.from('profiles').update({ selected_milestones: next }).eq('id', profile.id).then(() => {})
-      return next
-    })
+    const prev = selectedMilestones
+    const next = prev.includes(id) ? prev.filter(m => m !== id) : [...prev, id]
+    setSelectedMilestones(next) // optimistic update
+    try {
+      const { error } = await supabase.from('profiles').update({ selected_milestones: next }).eq('id', profile.id)
+      if (error) throw error
+    } catch (err) {
+      console.error('toggleMilestone failed:', err)
+      setSelectedMilestones(prev) // rollback on error
+    }
   }
 
   const activeMilestones = MILESTONE_OPTIONS.filter(m => selectedMilestones.includes(m.id))

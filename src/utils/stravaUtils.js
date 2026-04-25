@@ -69,6 +69,50 @@ export async function fetchAllStravaRuns(accessToken) {
   return runs
 }
 
+// ── Bridge helpers — single source of truth for Strava→workout_logs ──
+
+/** Classify a Strava run into a workout_type based on pace and distance */
+export function classifyRunType(run) {
+  const distKm = (run.distance || 0) / 1000
+  const paceSecKm = distKm > 0 ? run.moving_time / distKm : null
+  if (paceSecKm && paceSecKm < 270) return 'interval'
+  if (paceSecKm && paceSecKm < 310) return 'tempo'
+  if (distKm >= 18) return 'long'
+  return 'easy'
+}
+
+/** Build a workout_logs DB row from a strava_runs row or raw Strava API object */
+export function makeStravaLogRow(run, userId) {
+  const distKm = (run.distance || 0) / 1000
+  // DB rows use strava_id; raw API objects use id
+  const stravaId = run.strava_id ?? run.id
+  return {
+    user_id:      userId,
+    workout_date: (run.start_date || '').slice(0, 10),
+    workout_type: classifyRunType(run),
+    distance_km:  parseFloat(distKm.toFixed(2)),
+    duration_min: Math.round((run.moving_time || 0) / 60),
+    notes:        `strava:${stravaId}`,
+    rpe:          null,
+  }
+}
+
+/**
+ * Return Strava runs not yet represented in workoutLogs.
+ * Works with both DB strava_runs rows (have strava_id) and raw API objects (have id).
+ */
+export function filterNewStravaRuns(stravaRuns, workoutLogs) {
+  const bridgedIds = new Set(
+    workoutLogs
+      .map(l => l.notes?.match(/strava:(\d+)/)?.[1])
+      .filter(Boolean)
+  )
+  return stravaRuns.filter(r => {
+    const id = String(r.strava_id ?? r.id)
+    return !bridgedIds.has(id)
+  })
+}
+
 // Get a valid access token, refreshing if needed
 export async function getValidToken(profile, supabase) {
   const now = Math.floor(Date.now() / 1000)
