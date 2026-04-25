@@ -187,11 +187,12 @@ export default function App() {
             }
           })
 
-          const { data: inserted } = await supabase
+          const { data: inserted, error: insertError } = await supabase
             .from('workout_logs')
             .insert(newRows)
             .select()
 
+          if (insertError) console.warn('Strava→workout_logs bridge failed:', insertError)
           if (inserted?.length) {
             mergedLogs = [...existingLogs, ...inserted]
               .sort((a, b) => new Date(b.workout_date) - new Date(a.workout_date))
