@@ -108,42 +108,46 @@ export function getPaceConfidence(workoutLogs = [], stravaRuns = []) {
 /**
  * Determine if the AI plan should be regenerated.
  *
- * Triggers regeneration when:
- * - No plan exists yet
- * - RPE = 3 on latest log (very hard effort)
- * - Logged distance > 30% more than planned (pushed harder than expected)
- * - Training gap detected (came back after pause)
- * - Week changed since last generation
- * - Plan is older than 7 days
+ * Priority tiers:
+ *
+ * ALWAYS (bypass cooldown):
+ *   - No plan exists
+ *   - Plan older than 7 days
+ *   - New calendar week since last gen
+ *
+ * HIGH PRIORITY (bypass cooldown, fire immediately on new log):
+ *   - RPE ≥ 8 — athlete pushed very hard, needs recovery adjustment
+ *   - Pace feedback too_hard / too_easy — pace calibration needed
+ *
+ * LOW PRIORITY (respect 4-hour cooldown, only on new log):
+ *   - Return from pause ≥ 5 days
+ *   - Distance spike ≥ 60% above recent average (with ≥ 5 historical logs)
+ *
+ * Deliberately removed (too noisy, handled by weekly regen):
+ *   - "Consistent training / progressive load" after N easy sessions
  */
 export function shouldRegeneratePlan(newLog, workoutLogs, aiPlan, profile) {
-  // Always generate if no plan
+  // ── Tier 1: Always regenerate ──────────────────────────────────
   if (!aiPlan) return { should: true, reason: 'Erstelle deinen personalisierten Plan' }
 
   const lastGen = aiPlan.generatedAt ? new Date(aiPlan.generatedAt) : null
+  const now     = Date.now()
 
-  // Stale plan (>7 days)
-  if (!lastGen || Date.now() - lastGen.getTime() > 7 * 24 * 60 * 60 * 1000) {
+  if (!lastGen || now - lastGen.getTime() > 7 * 24 * 60 * 60 * 1000) {
     return { should: true, reason: 'Wöchentliche Plan-Aktualisierung' }
   }
 
-  // Week changed since last generation
-  if (lastGen) {
-    const lastGenWeek = getWeekKey(lastGen)
-    const todayWeek   = getWeekKey(new Date())
-    if (lastGenWeek !== todayWeek) {
-      return { should: true, reason: 'Neue Woche — Plan wird angepasst' }
-    }
+  if (getWeekKey(lastGen) !== getWeekKey(new Date())) {
+    return { should: true, reason: 'Neue Woche — Plan wird angepasst' }
   }
 
+  // No new log → nothing more to check
   if (!newLog) return { should: false, reason: null }
 
-  // Very hard effort (RPE ≥ 8 on 1-10 scale) — needs recovery adjustment
+  // ── Tier 2: High-priority log signals (no cooldown) ────────────
   if (newLog.rpe >= 8) {
-    return { should: true, reason: 'Letztes Training war sehr intensiv — anpassen' }
+    return { should: true, reason: 'Letztes Training war sehr intensiv — Erholung anpassen' }
   }
-
-  // Pace feedback: athlete reported pace was wrong → recalibrate
   if (newLog.pace_feedback === 'too_hard') {
     return { should: true, reason: 'Pace war zu hart — wird angepasst' }
   }
@@ -151,38 +155,28 @@ export function shouldRegeneratePlan(newLog, workoutLogs, aiPlan, profile) {
     return { should: true, reason: 'Pace war zu leicht — wird erhöht' }
   }
 
-  // Came back after a long pause
+  // ── Cooldown: skip low-priority checks if plan < 4 h old ───────
+  const recentlyGenerated = lastGen && now - lastGen.getTime() < 4 * 60 * 60 * 1000
+  if (recentlyGenerated) return { should: false, reason: null }
+
+  // ── Tier 3: Low-priority log signals ───────────────────────────
+
+  // Return from a significant pause
   const prevLogs = workoutLogs.filter(l => l.id !== newLog.id)
   const { hasPause, pauseDays } = detectPause(prevLogs, profile?.sessions_per_week || 3)
   if (hasPause && pauseDays > 5) {
     return { should: true, reason: `${pauseDays} Tage Pause — sanfter Wiedereinstieg` }
   }
 
-  // Logged much more than usual (pushed hard)
+  // Unusually large distance spike (≥ 60% above average, needs ≥ 5 data points)
   if (newLog.distance_km) {
-    const recentLogs = workoutLogs
-      .filter(l => l.workout_type === newLog.workout_type && l.distance_km)
-      .slice(0, 5)
-    if (recentLogs.length >= 3) {
-      const avgKm = recentLogs.reduce((s, l) => s + l.distance_km, 0) / recentLogs.length
-      if (newLog.distance_km > avgKm * 1.3) {
+    const recentSameType = workoutLogs
+      .filter(l => l.workout_type === newLog.workout_type && l.distance_km && l.id !== newLog.id)
+      .slice(0, 8)
+    if (recentSameType.length >= 5) {
+      const avg = recentSameType.reduce((s, l) => s + l.distance_km, 0) / recentSameType.length
+      if (newLog.distance_km > avg * 1.6) {
         return { should: true, reason: 'Deutlich mehr als gewohnt gelaufen — Balance anpassen' }
-      }
-    }
-  }
-
-  // Consistent good training — progressively increase load after 3+ clean sessions
-  if (lastGen) {
-    const sessionsSinceLastGen = workoutLogs.filter(l =>
-      new Date(l.workout_date) >= lastGen && l.id !== newLog.id
-    )
-    if (sessionsSinceLastGen.length >= 2) {
-      // All recent sessions are comfortably easy (RPE ≤ 4 on 1-10 scale)
-      const recentRpe = [...sessionsSinceLastGen, newLog]
-        .map(l => l.rpe)
-        .filter(v => v != null)
-      if (recentRpe.length >= 2 && recentRpe.every(r => r <= 4)) {
-        return { should: true, reason: 'Konsistentes Training — Belastung wird progressiv angepasst' }
       }
     }
   }
