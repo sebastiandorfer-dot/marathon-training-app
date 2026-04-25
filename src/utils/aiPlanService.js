@@ -138,8 +138,8 @@ export function shouldRegeneratePlan(newLog, workoutLogs, aiPlan, profile) {
 
   if (!newLog) return { should: false, reason: null }
 
-  // Very hard effort — needs recovery adjustment
-  if (newLog.rpe === 3) {
+  // Very hard effort (RPE ≥ 8 on 1-10 scale) — needs recovery adjustment
+  if (newLog.rpe >= 8) {
     return { should: true, reason: 'Letztes Training war sehr intensiv — anpassen' }
   }
 
@@ -177,11 +177,11 @@ export function shouldRegeneratePlan(newLog, workoutLogs, aiPlan, profile) {
       new Date(l.workout_date) >= lastGen && l.id !== newLog.id
     )
     if (sessionsSinceLastGen.length >= 2) {
-      // All recent sessions including current one are easy/good (RPE ≤ 2)
+      // All recent sessions are comfortably easy (RPE ≤ 4 on 1-10 scale)
       const recentRpe = [...sessionsSinceLastGen, newLog]
         .map(l => l.rpe)
         .filter(v => v != null)
-      if (recentRpe.length >= 2 && recentRpe.every(r => r <= 2)) {
+      if (recentRpe.length >= 2 && recentRpe.every(r => r <= 4)) {
         return { should: true, reason: 'Konsistentes Training — Belastung wird progressiv angepasst' }
       }
     }
@@ -227,10 +227,9 @@ export async function generateAIPlan(profile, workoutLogs, stravaRuns = [], apiK
     .sort((a, b) => new Date(b.workout_date) - new Date(a.workout_date))
     .slice(0, 8)
 
-  const RPE_LABELS = { 1: 'leicht 😌', 2: 'gut 💪', 3: 'sehr hart 🔥' }
   const PACE_FB_LABELS = { too_hard: 'zu hart 🔥', perfect: 'perfekt ✓', too_easy: 'zu leicht 💨' }
   const logsText = recentLogs.map(l =>
-    `${l.workout_date}: ${l.workout_type}${l.distance_km ? ` ${l.distance_km}km` : ''}${l.duration_min ? ` ${l.duration_min}min` : ''}${l.rpe ? ` (${RPE_LABELS[l.rpe]})` : ''}${l.pace_feedback ? ` [Pace: ${PACE_FB_LABELS[l.pace_feedback] || l.pace_feedback}]` : ''}${l.notes && !l.notes.startsWith('strava:') ? ` — "${l.notes}"` : ''}`
+    `${l.workout_date}: ${l.workout_type}${l.distance_km ? ` ${l.distance_km}km` : ''}${l.duration_min ? ` ${l.duration_min}min` : ''}${l.rpe ? ` (RPE ${l.rpe}/10)` : ''}${l.pace_feedback ? ` [Pace: ${PACE_FB_LABELS[l.pace_feedback] || l.pace_feedback}]` : ''}${l.notes && !l.notes.startsWith('strava:') ? ` — "${l.notes}"` : ''}`
   ).join('\n')
 
   // Pace feedback summary for hard sessions
@@ -307,7 +306,7 @@ PACE-VORGABEN: ${paceInstructions}
 AUFGABE:
 1. Analysiere die Trainingssituation (Belastung, Erschöpfung, Pause)
 2. Erstelle Sessions für die restliche aktuelle Woche + Vorschau nächste Woche
-3. Passe die Intensität an (bei RPE=3 oder hoher Last → leichter; nach Pause → vorsichtig aufbauen)
+3. Passe die Intensität an (bei RPE ≥ 8 oder hoher Last → leichter; nach Pause → vorsichtig aufbauen)
 4. Gib konkrete Pace-Vorgaben entsprechend der Konfidenz
 
 Antworte NUR mit validem JSON (kein Markdown, keine Erklärung davor/danach):

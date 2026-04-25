@@ -23,11 +23,25 @@ const TYPE_META = {
   missed:   { label: 'Verpasst',     color: 'var(--c-text-3)',   icon: '—',  desc: '' },
 }
 
-const RPE_OPTIONS = [
-  { value: 1, emoji: '😌', label: 'Leicht', color: '#22c55e' },
-  { value: 2, emoji: '💪', label: 'Gut',    color: '#4a9eff' },
-  { value: 3, emoji: '🔥', label: 'Hart',   color: '#ef4444' },
-]
+// RPE 1-10: color + label per value
+function rpeColor(v) {
+  if (!v) return 'var(--c-text-3)'
+  if (v <= 3)  return '#22c55e'
+  if (v <= 5)  return '#84cc16'
+  if (v <= 7)  return '#f59e0b'
+  if (v <= 8)  return '#f97316'
+  return '#ef4444'
+}
+
+function rpeLabel(v) {
+  if (!v) return ''
+  if (v <= 2)  return 'Sehr leicht'
+  if (v <= 4)  return 'Locker'
+  if (v <= 6)  return 'Moderat'
+  if (v <= 8)  return 'Anspruchsvoll'
+  if (v === 9) return 'Sehr hart'
+  return 'Maximum'
+}
 
 const WORKOUT_TYPES = [
   { value: 'easy',     label: '🏃 Easy Lauf' },
@@ -243,7 +257,7 @@ export default function BuildPhaseToday({
       )}
 
       {/* Fatigue warning — show when avg RPE of recent sessions is high */}
-      {recentFatigue !== null && recentFatigue >= 2.5 && (
+      {recentFatigue !== null && recentFatigue >= 6.5 && (
         <div style={{
           background: '#fff7ed', border: '1.5px solid #f97316',
           borderRadius: 12, padding: '12px 16px',
@@ -446,26 +460,17 @@ export default function BuildPhaseToday({
               onChange={e => setLogForm(f => ({ ...f, notes: e.target.value }))} />
           </div>
 
-          {/* RPE selector */}
+          {/* RPE selector — 1-10 slider */}
           <div className="form-group">
-            <label className="form-label">Anstrengung (optional)</label>
-            <div style={{ display: 'flex', gap: 8 }}>
-              {RPE_OPTIONS.map(r => (
-                <button key={r.value} type="button"
-                  onClick={() => setLogForm(f => ({ ...f, rpe: f.rpe === r.value ? null : r.value }))}
-                  style={{
-                    flex: 1, padding: '10px 6px', borderRadius: 10,
-                    border: `2px solid ${logForm.rpe === r.value ? r.color : 'var(--c-border)'}`,
-                    background: logForm.rpe === r.value ? r.color + '22' : 'var(--c-card)',
-                    cursor: 'pointer', fontFamily: 'var(--font)',
-                    display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3,
-                    transition: 'all 0.15s',
-                  }}>
-                  <span style={{ fontSize: 20 }}>{r.emoji}</span>
-                  <span style={{ fontSize: 11, fontWeight: 600, color: logForm.rpe === r.value ? r.color : 'var(--c-text-3)' }}>{r.label}</span>
-                </button>
-              ))}
-            </div>
+            <label className="form-label" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span>Anstrengung (optional)</span>
+              {logForm.rpe != null && (
+                <span style={{ fontWeight: 700, color: rpeColor(logForm.rpe), fontSize: 13 }}>
+                  {logForm.rpe} — {rpeLabel(logForm.rpe)}
+                </span>
+              )}
+            </label>
+            <RpeSlider value={logForm.rpe} onChange={v => setLogForm(f => ({ ...f, rpe: v }))} />
           </div>
 
           {logSaveError && (
@@ -498,34 +503,8 @@ export default function BuildPhaseToday({
             <div style={{ width: 36, height: 4, borderRadius: 2, background: 'var(--c-border)', marginBottom: 4 }} />
 
             {!showPaceFeedback ? (
-              /* ── Step 1: RPE ── */
-              <>
-                <div style={{ fontWeight: 700, fontSize: 18, color: 'var(--c-text)' }}>Wie war das Training? 💬</div>
-                <p style={{ fontSize: 13, color: 'var(--c-text-3)', margin: '-8px 0 0', textAlign: 'center' }}>
-                  Das hilft mir, deinen nächsten Plan anzupassen.
-                </p>
-                <div style={{ display: 'flex', gap: 12, width: '100%' }}>
-                  {RPE_OPTIONS.map(r => (
-                    <button key={r.value} onClick={() => saveRpe(r.value)} disabled={rpeSaving}
-                      style={{
-                        flex: 1, padding: '18px 8px', borderRadius: 14,
-                        border: `2px solid ${r.color}44`,
-                        background: `${r.color}11`,
-                        cursor: 'pointer', fontFamily: 'var(--font)',
-                        display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6,
-                        transition: 'all 0.15s',
-                        opacity: rpeSaving ? 0.6 : 1,
-                      }}>
-                      <span style={{ fontSize: 30 }}>{r.emoji}</span>
-                      <span style={{ fontSize: 13, fontWeight: 700, color: r.color }}>{r.label}</span>
-                    </button>
-                  ))}
-                </div>
-                <button onClick={() => { setRpeLogId(null); setRpeWorkoutType(null) }}
-                  style={{ background: 'none', border: 'none', color: 'var(--c-text-3)', fontSize: 14, cursor: 'pointer', fontFamily: 'var(--font)', padding: '4px 12px' }}>
-                  Überspringen
-                </button>
-              </>
+              /* ── Step 1: RPE slider ── */
+              <RpeModalStep onSave={saveRpe} onSkip={() => { setRpeLogId(null); setRpeWorkoutType(null) }} disabled={rpeSaving} />
             ) : (
               /* ── Step 2: Pace Feedback (tempo/interval only) ── */
               <>
@@ -566,6 +545,115 @@ export default function BuildPhaseToday({
         </>
       )}
     </div>
+  )
+}
+
+// ── RPE Slider component (1–10) ───────────────────────────────────────────────
+function RpeSlider({ value, onChange }) {
+  const v = value ?? 0
+  const col = rpeColor(v || null)
+  return (
+    <div style={{ userSelect: 'none' }}>
+      <div style={{ position: 'relative', padding: '8px 0 4px' }}>
+        <input
+          type="range" min={1} max={10} step={1}
+          value={v || 5}
+          onChange={e => onChange(parseInt(e.target.value, 10))}
+          onMouseDown={() => { if (!v) onChange(5) }}
+          onTouchStart={() => { if (!v) onChange(5) }}
+          style={{
+            width: '100%', accentColor: col,
+            height: 6, cursor: 'pointer',
+            opacity: v ? 1 : 0.4,
+          }}
+        />
+      </div>
+      {/* tick labels */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 2 }}>
+        {[1,2,3,4,5,6,7,8,9,10].map(n => (
+          <button key={n} onClick={() => onChange(n)}
+            style={{
+              width: 24, height: 24, borderRadius: '50%', border: 'none',
+              background: v === n ? col : 'var(--c-card-hover)',
+              color: v === n ? '#fff' : 'var(--c-text-3)',
+              fontSize: 11, fontWeight: v === n ? 700 : 400,
+              cursor: 'pointer', fontFamily: 'var(--font)',
+              transition: 'all 0.12s',
+              flexShrink: 0,
+            }}>
+            {n}
+          </button>
+        ))}
+      </div>
+      {!v && (
+        <div style={{ fontSize: 12, color: 'var(--c-text-3)', marginTop: 6, textAlign: 'center' }}>
+          Tippe auf eine Zahl oder bewege den Regler
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── RPE Modal Step — post-log bottom sheet ─────────────────────────────────────
+function RpeModalStep({ onSave, onSkip, disabled }) {
+  const [val, setVal] = useState(null)
+  const col = rpeColor(val)
+
+  return (
+    <>
+      <div style={{ fontWeight: 700, fontSize: 18, color: 'var(--c-text)' }}>Wie anstrengend war es? 💬</div>
+      <p style={{ fontSize: 13, color: 'var(--c-text-3)', margin: '-8px 0 0', textAlign: 'center' }}>
+        Das hilft mir, deinen nächsten Plan anzupassen.
+      </p>
+
+      {/* Value display */}
+      <div style={{
+        width: 72, height: 72, borderRadius: '50%', flexShrink: 0,
+        background: val ? col + '18' : 'var(--c-card-hover)',
+        border: `2.5px solid ${val ? col : 'var(--c-border)'}`,
+        display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+        transition: 'all 0.2s',
+      }}>
+        {val ? (
+          <>
+            <span style={{ fontSize: 26, fontWeight: 800, color: col, lineHeight: 1 }}>{val}</span>
+            <span style={{ fontSize: 9, color: col, fontWeight: 600, marginTop: 1 }}>/10</span>
+          </>
+        ) : (
+          <span style={{ fontSize: 12, color: 'var(--c-text-3)', textAlign: 'center', padding: '0 8px' }}>RPE</span>
+        )}
+      </div>
+
+      {val && (
+        <div style={{ fontSize: 14, fontWeight: 700, color: col, marginTop: -8 }}>
+          {rpeLabel(val)}
+        </div>
+      )}
+
+      {/* Slider */}
+      <div style={{ width: '100%' }}>
+        <RpeSlider value={val} onChange={setVal} />
+      </div>
+
+      {/* Confirm button */}
+      <button
+        onClick={() => val && onSave(val)} disabled={!val || disabled}
+        style={{
+          width: '100%', padding: '14px 0', borderRadius: 14,
+          background: val ? col : 'var(--c-border)',
+          border: 'none', color: '#fff',
+          fontWeight: 700, fontSize: 16, cursor: val ? 'pointer' : 'default',
+          fontFamily: 'var(--font)', transition: 'background 0.2s',
+          opacity: disabled ? 0.6 : 1,
+        }}>
+        {disabled ? 'Speichern…' : val ? `RPE ${val} speichern` : 'Wähle eine Intensität'}
+      </button>
+
+      <button onClick={onSkip}
+        style={{ background: 'none', border: 'none', color: 'var(--c-text-3)', fontSize: 14, cursor: 'pointer', fontFamily: 'var(--font)', padding: '4px 12px' }}>
+        Überspringen
+      </button>
+    </>
   )
 }
 

@@ -568,8 +568,13 @@ export default function BuildPhasePlan({ profile, stravaRuns = [], workoutLogs =
                       </div>
                       {/* RPE badge */}
                       {logs?.[0]?.rpe && (
-                        <span style={{ fontSize: 16, title: ['','Leicht','Gut','Hart'][logs[0].rpe] }}>
-                          {['','😌','💪','🔥'][logs[0].rpe]}
+                        <span style={{
+                          fontSize: 12, fontWeight: 700,
+                          color: logs[0].rpe >= 8 ? '#ef4444' : logs[0].rpe >= 6 ? '#f59e0b' : '#22c55e',
+                          background: (logs[0].rpe >= 8 ? '#ef4444' : logs[0].rpe >= 6 ? '#f59e0b' : '#22c55e') + '18',
+                          borderRadius: 6, padding: '2px 6px',
+                        }}>
+                          {logs[0].rpe}/10
                         </span>
                       )}
                       <div style={{ fontSize: 16, color: 'var(--c-primary)' }}>✓</div>
