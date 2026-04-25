@@ -143,6 +143,14 @@ export function shouldRegeneratePlan(newLog, workoutLogs, aiPlan, profile) {
     return { should: true, reason: 'Letztes Training war sehr intensiv — anpassen' }
   }
 
+  // Pace feedback: athlete reported pace was wrong → recalibrate
+  if (newLog.pace_feedback === 'too_hard') {
+    return { should: true, reason: 'Pace war zu hart — wird angepasst' }
+  }
+  if (newLog.pace_feedback === 'too_easy') {
+    return { should: true, reason: 'Pace war zu leicht — wird erhöht' }
+  }
+
   // Came back after a long pause
   const prevLogs = workoutLogs.filter(l => l.id !== newLog.id)
   const { hasPause, pauseDays } = detectPause(prevLogs, profile?.sessions_per_week || 3)
@@ -220,9 +228,16 @@ export async function generateAIPlan(profile, workoutLogs, stravaRuns = [], apiK
     .slice(0, 8)
 
   const RPE_LABELS = { 1: 'leicht 😌', 2: 'gut 💪', 3: 'sehr hart 🔥' }
+  const PACE_FB_LABELS = { too_hard: 'zu hart 🔥', perfect: 'perfekt ✓', too_easy: 'zu leicht 💨' }
   const logsText = recentLogs.map(l =>
-    `${l.workout_date}: ${l.workout_type}${l.distance_km ? ` ${l.distance_km}km` : ''}${l.duration_min ? ` ${l.duration_min}min` : ''}${l.rpe ? ` (${RPE_LABELS[l.rpe]})` : ''}${l.notes ? ` — "${l.notes}"` : ''}`
+    `${l.workout_date}: ${l.workout_type}${l.distance_km ? ` ${l.distance_km}km` : ''}${l.duration_min ? ` ${l.duration_min}min` : ''}${l.rpe ? ` (${RPE_LABELS[l.rpe]})` : ''}${l.pace_feedback ? ` [Pace: ${PACE_FB_LABELS[l.pace_feedback] || l.pace_feedback}]` : ''}${l.notes && !l.notes.startsWith('strava:') ? ` — "${l.notes}"` : ''}`
   ).join('\n')
+
+  // Pace feedback summary for hard sessions
+  const paceFeedbackLogs = recentLogs.filter(l => l.pace_feedback && (l.workout_type === 'tempo' || l.workout_type === 'interval'))
+  const paceFeedbackText = paceFeedbackLogs.length > 0
+    ? paceFeedbackLogs.map(l => `${l.workout_date} ${l.workout_type}: ${PACE_FB_LABELS[l.pace_feedback] || l.pace_feedback}`).join('\n')
+    : null
 
   // Strava context
   const stravaText = stravaRuns.slice(0, 5).map(r => {
@@ -253,6 +268,11 @@ export async function generateAIPlan(profile, workoutLogs, stravaRuns = [], apiK
   const goalLabel = profile.training_goal ? goalLabels[profile.training_goal] || profile.training_goal : null
 
   const prompt = `Du bist ein erfahrener Marathontrainer. Erstelle einen dynamisch angepassten Trainingsplan.
+${paceFeedbackText ? `
+PACE-FEEDBACK DES ATHLETEN (Tempo/Intervall-Einheiten):
+${paceFeedbackText}
+→ Passe die Pace-Vorgaben entsprechend an: bei "zu hart" Pace um 5-10 Sek/km reduzieren, bei "zu leicht" erhöhen.
+` : ''}
 
 ATHLETENPROFIL:
 - Level: ${profile.level || 'Einsteiger'}

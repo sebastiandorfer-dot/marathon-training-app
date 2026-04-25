@@ -218,6 +218,7 @@ export default function TodayTab({ user, profile, trainingPlan, completedWorkout
             <StravaFeedbackCard
               user={user}
               run={pendingStravaFeedback.run}
+              runWorkoutType={pendingStravaFeedback.log?.workout_type}
               onSubmit={onStravaFeedback}
               onDismiss={() => onStravaFeedback(null, null)}
             />
@@ -993,11 +994,14 @@ function RaceDayCountdown({ daysLeft, marathonName }) {
 }
 
 // ── Strava Feedback Card ───────────────────────────────────────────────────────
-function StravaFeedbackCard({ user, run, onSubmit, onDismiss }) {
+function StravaFeedbackCard({ user, run, runWorkoutType, onSubmit, onDismiss }) {
   const { coachName, avatarUrl } = useCoachIdentity(user)
   const [rpe, setRpe] = useState(null)
   const [notes, setNotes] = useState('')
+  const [paceFeedback, setPaceFeedback] = useState(null)
   const [saving, setSaving] = useState(false)
+
+  const showPaceQuestion = runWorkoutType === 'tempo' || runWorkoutType === 'interval'
 
   const distKm   = (run.distance / 1000).toFixed(1)
   const durMin   = Math.round(run.moving_time / 60)
@@ -1007,7 +1011,7 @@ function StravaFeedbackCard({ user, run, onSubmit, onDismiss }) {
 
   async function handleSubmit() {
     setSaving(true)
-    await onSubmit(rpe, notes.trim() || null)
+    await onSubmit(rpe, notes.trim() || null, paceFeedback)
   }
 
   const rpeLabels = ['😴','😌','🙂','💪','😤','🔥','💀']
@@ -1072,6 +1076,34 @@ function StravaFeedbackCard({ user, run, onSubmit, onDismiss }) {
           fontFamily: 'inherit',
         }}
       />
+
+      {/* Pace feedback — only for tempo/interval runs */}
+      {showPaceQuestion && (
+        <div style={{ marginBottom: 2 }}>
+          <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--c-text-2)', marginBottom: 8 }}>
+            Wie war die Pace? ⚡
+          </div>
+          <div style={{ display: 'flex', gap: 8 }}>
+            {[
+              { value: 'too_hard', emoji: '🔥', label: 'Zu hart',   color: '#ef4444' },
+              { value: 'perfect',  emoji: '✓',  label: 'Perfekt',   color: '#22c55e' },
+              { value: 'too_easy', emoji: '💨', label: 'Zu leicht', color: '#4a9eff' },
+            ].map(opt => (
+              <button key={opt.value} onClick={() => setPaceFeedback(p => p === opt.value ? null : opt.value)}
+                style={{
+                  flex: 1, padding: '10px 4px', borderRadius: 10, cursor: 'pointer',
+                  border: `2px solid ${paceFeedback === opt.value ? opt.color : 'var(--c-border)'}`,
+                  background: paceFeedback === opt.value ? `${opt.color}22` : 'var(--c-bg)',
+                  fontFamily: 'inherit', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3,
+                  transition: 'all 0.15s',
+                }}>
+                <span style={{ fontSize: 20 }}>{opt.emoji}</span>
+                <span style={{ fontSize: 11, fontWeight: 700, color: paceFeedback === opt.value ? opt.color : 'var(--c-text-3)' }}>{opt.label}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
 
       <button
         onClick={handleSubmit}

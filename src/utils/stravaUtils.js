@@ -71,25 +71,83 @@ export async function fetchAllStravaRuns(accessToken) {
 
 // ── Bridge helpers — single source of truth for Strava→workout_logs ──
 
-/** Classify a Strava run into a workout_type based on pace and distance */
-export function classifyRunType(run) {
-  const distKm = (run.distance || 0) / 1000
+/** Returns the user's target marathon pace in seconds/km, or null if not set */
+export function getTargetPaceSec(profile) {
+  if (!profile?.target_pace_min) return null
+  return (parseInt(profile.target_pace_min, 10) * 60) + (parseInt(profile.target_pace_sec, 10) || 0)
+}
+
+/** Round seconds to nearest 5 */
+function roundTo5(sec) {
+  return Math.round(sec / 5) * 5
+}
+
+/** Format total seconds as "M:SS" */
+function fmtPace(totalSec) {
+  const s = Math.round(totalSec)
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`
+}
+
+/**
+ * Classify a Strava run into a workout_type.
+ * When profile is provided, thresholds are relative to target marathon pace (MP):
+ *   interval  = faster than MP − 50 s/km  (≈ 5 K race pace)
+ *   tempo     = MP − 50 s  to  MP − 5 s   (lactate threshold zone)
+ *   long      = ≥ 18 km regardless of pace (checked first)
+ *   easy      = everything else
+ * Falls back to absolute thresholds when no target pace is set.
+ */
+export function classifyRunType(run, profile = null) {
+  const distKm    = (run.distance || 0) / 1000
   const paceSecKm = distKm > 0 ? run.moving_time / distKm : null
-  if (paceSecKm && paceSecKm < 270) return 'interval'
-  if (paceSecKm && paceSecKm < 310) return 'tempo'
+
+  // Long run is always distance-based — check before pace
   if (distKm >= 18) return 'long'
+
+  if (paceSecKm) {
+    const mp = getTargetPaceSec(profile)
+    if (mp) {
+      if (paceSecKm < mp - 50) return 'interval'
+      if (paceSecKm < mp + 20) return 'tempo'   // anything from near-MP down to interval threshold
+    } else {
+      // Absolute fallback when no target pace is configured
+      if (paceSecKm < 270) return 'interval'
+      if (paceSecKm < 310) return 'tempo'
+    }
+  }
   return 'easy'
 }
 
+/**
+ * Generate a pace target range for a workout type, displayed in 5-second intervals.
+ * Offsets from marathon pace (MP):
+ *   interval → MP − 70 s (≈ 5 K pace)
+ *   tempo    → MP − 27 s (midpoint of lactate threshold zone)
+ *   long     → MP + 40 s (comfortable long run pace)
+ *   easy     → MP + 75 s (easy aerobic pace)
+ * Returns e.g. "5:00–5:10/km" or null if no target pace is set.
+ */
+export function getPaceTargetRange(profile, workoutType) {
+  const mp = getTargetPaceSec(profile)
+  if (!mp) return null
+
+  const offsets = { interval: -70, tempo: -27, long: 40, easy: 75 }
+  const offset  = offsets[workoutType]
+  if (offset === undefined) return null
+
+  const center = roundTo5(mp + offset)
+  return `${fmtPace(center - 5)}–${fmtPace(center + 5)}/km`
+}
+
 /** Build a workout_logs DB row from a strava_runs row or raw Strava API object */
-export function makeStravaLogRow(run, userId) {
-  const distKm = (run.distance || 0) / 1000
+export function makeStravaLogRow(run, userId, profile = null) {
+  const distKm   = (run.distance || 0) / 1000
   // DB rows use strava_id; raw API objects use id
   const stravaId = run.strava_id ?? run.id
   return {
     user_id:      userId,
     workout_date: (run.start_date || '').slice(0, 10),
-    workout_type: classifyRunType(run),
+    workout_type: classifyRunType(run, profile),
     distance_km:  parseFloat(distKm.toFixed(2)),
     duration_min: Math.round((run.moving_time || 0) / 60),
     notes:        `strava:${stravaId}`,

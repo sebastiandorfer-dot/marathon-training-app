@@ -15,7 +15,7 @@ import PlanTab from './components/tabs/PlanTab'
 import CoachTab from './components/tabs/CoachTab'
 import ProfileTab from './components/tabs/ProfileTab'
 import FitnessTab from './components/tabs/FitnessTab'
-import { exchangeStravaCode, getValidToken, fetchAllStravaRuns, makeStravaLogRow, filterNewStravaRuns } from './utils/stravaUtils'
+import { exchangeStravaCode, getValidToken, fetchAllStravaRuns, makeStravaLogRow, filterNewStravaRuns, classifyRunType } from './utils/stravaUtils'
 
 // Views: 'loading' | 'auth' | 'onboarding' | 'generating' | 'app'
 export default function App() {
@@ -50,17 +50,12 @@ export default function App() {
       .filter(r => !loggedStravaIds.has(String(r.strava_id)))
       .map(r => {
         const distKm = r.distance / 1000
-        const paceSecKm = distKm > 0 ? r.moving_time / distKm : null
-        let workout_type = 'easy'
-        if (paceSecKm && paceSecKm < 270) workout_type = 'interval'
-        else if (paceSecKm && paceSecKm < 310) workout_type = 'tempo'
-        else if (distKm >= 18) workout_type = 'long'
         return {
           id: `strava-${r.strava_id}`,
           workout_date: r.start_date.slice(0, 10),
           distance_km: parseFloat(distKm.toFixed(2)),
           duration_min: Math.round(r.moving_time / 60),
-          workout_type,
+          workout_type: classifyRunType(r, profile),
           notes: `strava:${r.strava_id}`,
           rpe: null,
           _fromStrava: true,
@@ -68,7 +63,7 @@ export default function App() {
       })
     return [...workoutLogs, ...stravaAsLogs]
       .sort((a, b) => new Date(b.workout_date) - new Date(a.workout_date))
-  }, [workoutLogs, stravaRuns])
+  }, [workoutLogs, stravaRuns, profile])
 
   // ── Boot: check auth session + Strava OAuth callback ─────────
   useEffect(() => {
@@ -181,7 +176,7 @@ export default function App() {
 
       const toInsert = filterNewStravaRuns(stravaRunsData, existingLogs)
       if (toInsert.length > 0) {
-        const newRows = toInsert.map(r => makeStravaLogRow(r, authUser.id))
+        const newRows = toInsert.map(r => makeStravaLogRow(r, authUser.id, activeProfile))
         const { data: inserted, error: insertError } = await supabase
           .from('workout_logs').insert(newRows).select()
         if (insertError) console.warn('Strava→workout_logs bridge failed:', insertError)
@@ -440,7 +435,7 @@ export default function App() {
     // Auto-import any new runs that aren't in workout_logs yet
     const toInsert = filterNewStravaRuns(newRuns, workoutLogsRef.current)
     if (toInsert.length > 0) {
-      const newRows = toInsert.map(r => makeStravaLogRow(r, profile?.id))
+      const newRows = toInsert.map(r => makeStravaLogRow(r, profile?.id, profile))
       const { data: inserted } = await supabase.from('workout_logs').insert(newRows).select()
       if (inserted?.length) {
         const merged = [...workoutLogsRef.current, ...inserted]
@@ -503,7 +498,7 @@ export default function App() {
       const newRuns = filterNewStravaRuns(recentRuns, workoutLogsRef.current)
       let newestLog = null
       for (const r of newRuns) {
-        const row = makeStravaLogRow(r, currentProfile.id)
+        const row = makeStravaLogRow(r, currentProfile.id, currentProfile)
         const { data: inserted } = await supabase.from('workout_logs').insert(row).select().single()
         if (inserted) {
           workoutLogsRef.current = [inserted, ...workoutLogsRef.current]
@@ -640,13 +635,15 @@ export default function App() {
               lastPlanChange={lastPlanChange}
               onPlanChangeDismiss={() => setLastPlanChange(null)}
               pendingStravaFeedback={pendingStravaFeedback}
-              onStravaFeedback={async (rpe, notes) => {
+              onStravaFeedback={async (rpe, notes, paceFeedback) => {
                 if (!pendingStravaFeedback) return
                 // rpe=null means the user dismissed — just clear the card, no DB write
                 if (rpe != null) {
                   const { log } = pendingStravaFeedback
+                  const updateFields = { rpe, notes: notes || log.notes }
+                  if (paceFeedback) updateFields.pace_feedback = paceFeedback
                   const { data: updated } = await supabase
-                    .from('workout_logs').update({ rpe, notes: notes || log.notes })
+                    .from('workout_logs').update(updateFields)
                     .eq('id', log.id).select().single()
                   if (updated) {
                     workoutLogsRef.current = workoutLogsRef.current.map(l => l.id === updated.id ? updated : l)
