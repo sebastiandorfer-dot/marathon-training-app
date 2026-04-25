@@ -390,8 +390,10 @@ export default function BuildPhasePlan({ profile, stravaRuns = [], workoutLogs =
   async function saveSchedule() {
     setSaving(true)
     try {
-      await supabase.from('profiles').update({ build_phase_schedule: schedule }).eq('id', profile.id)
-      if (onProfileUpdate) onProfileUpdate({ ...profile, build_phase_schedule: schedule })
+      const today = new Date().toISOString().split('T')[0]
+      const updates = { build_phase_schedule: schedule, schedule_since: today }
+      await supabase.from('profiles').update(updates).eq('id', profile.id)
+      if (onProfileUpdate) onProfileUpdate({ ...profile, ...updates })
       setScheduleEditing(false)
     } catch (e) { console.error(e) }
     finally { setSaving(false) }
