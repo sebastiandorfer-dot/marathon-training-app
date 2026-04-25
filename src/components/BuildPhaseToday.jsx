@@ -333,10 +333,21 @@ export default function BuildPhaseToday({
               {/* Workout hints: pace, structure, tip */}
               {!alreadyLogged && workoutHint && (
                 <div style={{ marginTop: 10, display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                  {workoutHint.title && (
+                    <div style={{ width: '100%', fontSize: 13, fontWeight: 700, color: 'var(--c-text-2)', marginBottom: -2 }}>
+                      {workoutHint.title}
+                    </div>
+                  )}
                   {workoutHint.pace && (
                     <div style={{ background: planMeta.color + '15', border: `1px solid ${planMeta.color}33`, borderRadius: 8, padding: '5px 10px' }}>
                       <div style={{ fontSize: 11, color: 'var(--c-text-3)' }}>Pace</div>
                       <div style={{ fontSize: 13, fontWeight: 700, color: planMeta.color }}>{workoutHint.pace}</div>
+                    </div>
+                  )}
+                  {workoutHint.distance && (
+                    <div style={{ background: 'var(--c-card-hover)', border: '1px solid var(--c-border)', borderRadius: 8, padding: '5px 10px' }}>
+                      <div style={{ fontSize: 11, color: 'var(--c-text-3)' }}>Distanz</div>
+                      <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--c-text)' }}>{workoutHint.distance}</div>
                     </div>
                   )}
                   {workoutHint.duration && (
@@ -562,13 +573,15 @@ export default function BuildPhaseToday({
 function getAIWorkoutHint(aiSession, paceConf) {
   if (!aiSession) return null
   return {
-    pace: aiSession.pace || null,
+    title:    aiSession.title    || null,
+    distance: aiSession.distance_km ? `${aiSession.distance_km} km` : null,
     duration: aiSession.duration_min ? `${aiSession.duration_min} min` : null,
+    pace:     aiSession.pace     || null,
     structure: aiSession.structure || null,
-    tip: aiSession.tip || null,
+    tip:      aiSession.tip      || null,
     // Show data confidence notice when pace is a rough estimate
     confidenceNote: paceConf.level === 'none' || paceConf.level === 'low'
-      ? `Pace-Schätzung (${paceConf.dataPoints} Datenpunkte — logge mehr Einheiten für präzisere Vorgaben)`
+      ? `Pace-Schätzung (${paceConf.dataPoints} Datenpunkte — logge mehr für präzisere Vorgaben)`
       : paceConf.level === 'medium'
         ? `Basierend auf ${paceConf.dataPoints} Trainings`
         : null,

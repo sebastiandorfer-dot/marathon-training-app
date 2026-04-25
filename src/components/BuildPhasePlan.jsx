@@ -87,6 +87,84 @@ function rebuildAfterEdit(changedDay, newType, profile) {
   return next
 }
 
+// ── AI Day Detail — expandable structure/tip panel for weekly plan cards ──────
+function AIDayDetail({ session, meta }) {
+  const [open, setOpen] = useState(false)
+  const hasContent = session.structure || session.tip
+
+  return (
+    <div style={{ borderTop: `1px solid ${meta.color}22` }}>
+      {/* Toggle strip */}
+      <button
+        onClick={() => setOpen(v => !v)}
+        style={{
+          width: '100%', background: 'none', border: 'none', cursor: 'pointer',
+          fontFamily: 'var(--font)', padding: '5px 14px',
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+        }}
+      >
+        <span style={{ fontSize: 11, color: meta.color, fontWeight: 600 }}>
+          🤖 KI-Details
+        </span>
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none"
+          stroke="var(--c-text-3)" strokeWidth="2.5" strokeLinecap="round"
+          style={{ transform: open ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s' }}>
+          <path d="M6 9l6 6 6-6"/>
+        </svg>
+      </button>
+
+      {open && hasContent && (
+        <div style={{
+          padding: '8px 14px 12px',
+          background: meta.color + '08',
+          display: 'flex', flexDirection: 'column', gap: 8,
+        }}>
+          {session.pace && (
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              <div style={{
+                background: 'var(--c-card)', border: `1px solid ${meta.color}33`,
+                borderRadius: 8, padding: '5px 10px', textAlign: 'center',
+              }}>
+                <div style={{ fontSize: 10, color: 'var(--c-text-3)', marginBottom: 1 }}>Pace</div>
+                <div style={{ fontSize: 13, fontWeight: 700, color: meta.color }}>{session.pace}</div>
+              </div>
+              {session.distance_km && (
+                <div style={{
+                  background: 'var(--c-card)', border: '1px solid var(--c-border)',
+                  borderRadius: 8, padding: '5px 10px', textAlign: 'center',
+                }}>
+                  <div style={{ fontSize: 10, color: 'var(--c-text-3)', marginBottom: 1 }}>Distanz</div>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--c-text)' }}>{session.distance_km} km</div>
+                </div>
+              )}
+              {session.duration_min && (
+                <div style={{
+                  background: 'var(--c-card)', border: '1px solid var(--c-border)',
+                  borderRadius: 8, padding: '5px 10px', textAlign: 'center',
+                }}>
+                  <div style={{ fontSize: 10, color: 'var(--c-text-3)', marginBottom: 1 }}>Dauer</div>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--c-text)' }}>{session.duration_min} min</div>
+                </div>
+              )}
+            </div>
+          )}
+          {session.structure && (
+            <div>
+              <div style={{ fontSize: 10, fontWeight: 700, color: meta.color, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 3 }}>Aufbau</div>
+              <div style={{ fontSize: 12, color: 'var(--c-text-2)', lineHeight: 1.5 }}>{session.structure}</div>
+            </div>
+          )}
+          {session.tip && (
+            <div style={{ fontSize: 12, color: 'var(--c-text-2)', fontStyle: 'italic', lineHeight: 1.5 }}>
+              💡 {session.tip}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
 const MILESTONE_OPTIONS = [
   {
     id: 'weekly_km',
@@ -241,8 +319,8 @@ export default function BuildPhasePlan({ profile, stravaRuns = [], workoutLogs =
   // ── AI-driven effective schedule ──────────────────────────────
   // For the current and next week, replace the base schedule with AI plan sessions.
   // Option B: AI sets both day AND type — user's training_days are just a default.
-  const { effectiveSchedule, aiPlanActive } = useMemo(() => {
-    if (!aiPlan?.sessions?.length) return { effectiveSchedule: schedule, aiPlanActive: false }
+  const { effectiveSchedule, aiPlanActive, aiSessionByDay } = useMemo(() => {
+    if (!aiPlan?.sessions?.length) return { effectiveSchedule: schedule, aiPlanActive: false, aiSessionByDay: {} }
 
     const today       = new Date(); today.setHours(0, 0, 0, 0)
     const currMonday  = getMondayOf(today)
@@ -250,22 +328,24 @@ export default function BuildPhasePlan({ profile, stravaRuns = [], workoutLogs =
     const isCurrentWeek = monday.getTime() === currMonday.getTime()
     const isNextWeek    = monday.getTime() === nextMonday.getTime()
 
-    if (!isCurrentWeek && !isNextWeek) return { effectiveSchedule: schedule, aiPlanActive: false }
+    if (!isCurrentWeek && !isNextWeek) return { effectiveSchedule: schedule, aiPlanActive: false, aiSessionByDay: {} }
 
     const aiSessions = aiPlan.sessions.filter(s =>
       isNextWeek ? s.isNextWeek === true : !s.isNextWeek
     )
-    if (!aiSessions.length) return { effectiveSchedule: schedule, aiPlanActive: false }
+    if (!aiSessions.length) return { effectiveSchedule: schedule, aiPlanActive: false, aiSessionByDay: {} }
 
     // Build all-rest base, place AI sessions on their days
     const effective = {}
+    const byDay = {}
     for (let i = 0; i < 7; i++) effective[i] = 'rest'
     for (const s of aiSessions) {
       if (s.dayOfWeek >= 0 && s.dayOfWeek <= 6 && s.type && s.type !== 'rest') {
         effective[s.dayOfWeek] = s.type
+        byDay[s.dayOfWeek] = s
       }
     }
-    return { effectiveSchedule: effective, aiPlanActive: true }
+    return { effectiveSchedule: effective, aiPlanActive: true, aiSessionByDay: byDay }
   }, [aiPlan, schedule, monday])
 
   const displaySchedule = useMemo(() =>
@@ -503,11 +583,32 @@ export default function BuildPhasePlan({ profile, stravaRuns = [], workoutLogs =
                   ) : (
                     <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 10 }}>
                       <span style={{ fontSize: 18 }}>{meta.icon}</span>
-                      <div style={{ flex: 1 }}>
+                      <div style={{ flex: 1, minWidth: 0 }}>
                         <div style={{ fontSize: 13, fontWeight: 600, color: (isRest || isMissed) ? 'var(--c-text-3)' : meta.color, textDecoration: isMissed ? 'line-through' : 'none' }}>
-                          {meta.label}
+                          {aiPlanActive && aiSessionByDay[dayIdx]?.title
+                            ? aiSessionByDay[dayIdx].title
+                            : meta.label}
                         </div>
-                        {adjusted && !isPast && (
+                        {/* AI session stats: distance / duration / pace */}
+                        {aiPlanActive && aiSessionByDay[dayIdx] && !isRest && !isMissed && (() => {
+                          const s = aiSessionByDay[dayIdx]
+                          const parts = []
+                          if (s.distance_km) parts.push(`${s.distance_km} km`)
+                          if (s.duration_min) parts.push(`${s.duration_min} min`)
+                          return parts.length > 0 ? (
+                            <div style={{ fontSize: 11, color: 'var(--c-text-3)', display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 2 }}>
+                              {parts.map((p, i) => <span key={i}>{p}</span>)}
+                              {s.pace && (
+                                <span style={{ color: meta.color, fontWeight: 600 }}>@ {s.pace}</span>
+                              )}
+                            </div>
+                          ) : s.pace ? (
+                            <div style={{ fontSize: 11, color: meta.color, fontWeight: 600, marginTop: 2 }}>
+                              @ {s.pace}
+                            </div>
+                          ) : null
+                        })()}
+                        {adjusted && !isPast && !aiPlanActive && (
                           <div style={{ fontSize: 11, color: 'var(--c-text-3)', marginTop: 1 }}>↩ verschoben</div>
                         )}
                       </div>
@@ -519,6 +620,13 @@ export default function BuildPhasePlan({ profile, stravaRuns = [], workoutLogs =
                     </div>
                   )}
                 </div>
+
+                {/* AI session detail panel — structure + tip, expandable */}
+                {aiPlanActive && !logged && !isRest && !isMissed && !isBlocked && !scheduleEditing &&
+                  aiSessionByDay[dayIdx] &&
+                  (aiSessionByDay[dayIdx].structure || aiSessionByDay[dayIdx].tip || aiSessionByDay[dayIdx].pace) && (
+                  <AIDayDetail session={aiSessionByDay[dayIdx]} meta={meta} />
+                )}
 
                 {/* Edit mode: type picker */}
                 {scheduleEditing && (
