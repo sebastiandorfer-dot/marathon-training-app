@@ -74,11 +74,14 @@ export default function BuildPhaseToday({
   // Today's planned workout from build phase schedule
   const todayPlan = useMemo(() => getTodayBuildEntry(profile, workoutLogs), [profile, workoutLogs])
   const todayEntry = todayPlan.entry
-  const isRestDay  = !todayEntry || todayEntry.type === 'rest' || todayEntry.type === 'blocked'
-  const alreadyLogged = todayEntry?.logged
 
   // AI plan — today's session and confidence
   const aiSession    = useMemo(() => getTodayAISession(aiPlan), [aiPlan])
+
+  // Effective type: AI session takes priority over base schedule (Option B)
+  const effectiveTodayType = aiSession?.type || todayEntry?.type
+  const isRestDay  = !effectiveTodayType || effectiveTodayType === 'rest' || effectiveTodayType === 'blocked'
+  const alreadyLogged = todayEntry?.logged
   const paceConf     = useMemo(() => getPaceConfidence(workoutLogs, stravaRuns), [workoutLogs, stravaRuns])
   const { hasPause, pauseDays } = useMemo(() => detectPause(workoutLogs, profile.sessions_per_week || 3), [workoutLogs, profile.sessions_per_week])
 
@@ -86,7 +89,7 @@ export default function BuildPhaseToday({
   const [logOpen, setLogOpen]     = useState(false)
   const [logForm, setLogForm]     = useState({
     workout_date: new Date().toISOString().split('T')[0],
-    workout_type: (!isRestDay && todayEntry?.type) || 'easy',
+    workout_type: (!isRestDay && effectiveTodayType) || 'easy',
     distance_km: '',
     duration_min: '',
     notes: '',
@@ -101,10 +104,10 @@ export default function BuildPhaseToday({
 
   // Keep log form type in sync with plan (on first load)
   useEffect(() => {
-    if (!isRestDay && todayEntry?.type && !alreadyLogged) {
-      setLogForm(f => ({ ...f, workout_type: todayEntry.type }))
+    if (!isRestDay && effectiveTodayType && !alreadyLogged) {
+      setLogForm(f => ({ ...f, workout_type: effectiveTodayType }))
     }
-  }, [todayEntry?.type])
+  }, [effectiveTodayType])
 
   async function submitLog() {
     if (!logForm.distance_km && !logForm.duration_min) {
@@ -175,12 +178,13 @@ export default function BuildPhaseToday({
     }
   }
 
-  const planMeta    = todayEntry ? (TYPE_META[todayEntry.type] || TYPE_META.rest) : TYPE_META.rest
-  // Use AI session hint if available, fall back to static calculation
-  const workoutHint = (!isRestDay && todayEntry)
+  // planMeta follows effective type (AI > schedule)
+  const planMeta    = TYPE_META[effectiveTodayType] || TYPE_META.rest
+  // Workout hint: AI session data first, then static calculation
+  const workoutHint = (!isRestDay)
     ? (aiSession
         ? getAIWorkoutHint(aiSession, paceConf)
-        : getWorkoutHints(todayEntry.type, profile))
+        : getWorkoutHints(effectiveTodayType, profile))
     : null
 
   return (
@@ -293,8 +297,8 @@ export default function BuildPhaseToday({
                 </div>
               )}
               {/* Pace target range for tempo/interval — shown before the workout */}
-              {!isRestDay && !alreadyLogged && (todayEntry?.type === 'tempo' || todayEntry?.type === 'interval') && (() => {
-                const range = getPaceTargetRange(profile, todayEntry.type)
+              {!isRestDay && !alreadyLogged && (effectiveTodayType === 'tempo' || effectiveTodayType === 'interval') && (() => {
+                const range = getPaceTargetRange(profile, effectiveTodayType)
                 return range ? (
                   <div style={{
                     display: 'inline-flex', alignItems: 'center', gap: 6, marginTop: 6,
@@ -313,16 +317,16 @@ export default function BuildPhaseToday({
                   {todayEntry.logs[0].duration_min ? `${todayEntry.logs[0].duration_min} min` : ''}
                 </div>
               )}
-              {/* AI type override badge — show when AI recommends a different workout than the schedule */}
-              {!alreadyLogged && !isRestDay && aiSession && todayEntry && aiSession.type !== todayEntry.type && (
+              {/* AI active badge — shown when AI type differs from base schedule */}
+              {!alreadyLogged && !isRestDay && aiSession && todayEntry?.type && aiSession.type !== todayEntry.type && (
                 <div style={{
                   display: 'inline-flex', alignItems: 'center', gap: 5, marginTop: 8,
                   background: 'var(--c-primary-dim)', border: '1px solid var(--c-primary)',
-                  borderRadius: 8, padding: '4px 10px', fontSize: 12,
+                  borderRadius: 8, padding: '3px 8px', fontSize: 11,
                 }}>
-                  <span>🤖</span>
+                  <span style={{ fontSize: 11 }}>🤖</span>
                   <span style={{ color: 'var(--c-primary)', fontWeight: 600 }}>
-                    KI empfiehlt heute: {TYPE_META[aiSession.type]?.label || aiSession.type}
+                    KI-angepasst (Plan: {TYPE_META[todayEntry.type]?.label || todayEntry.type})
                   </span>
                 </div>
               )}

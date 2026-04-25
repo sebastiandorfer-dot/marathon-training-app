@@ -672,6 +672,7 @@ export default function App() {
               stravaRuns={stravaRuns}
               onTabChange={setActiveTab}
               onProfileUpdate={handleProfileUpdate}
+              aiPlan={aiPlan}
             />
           )}
           {activeTab === 'coach' && (

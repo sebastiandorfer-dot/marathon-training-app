@@ -178,7 +178,7 @@ const MILESTONE_OPTIONS = [
   },
 ]
 
-export default function BuildPhasePlan({ profile, stravaRuns = [], workoutLogs = [], onProfileUpdate, weekOffset: weekOffsetProp, onWeekOffsetChange }) {
+export default function BuildPhasePlan({ profile, stravaRuns = [], workoutLogs = [], onProfileUpdate, weekOffset: weekOffsetProp, onWeekOffsetChange, aiPlan = null }) {
   const trainingMode    = profile.training_mode || 'race'
   const hasMarathon     = !!profile.marathon_date
   const daysToRacePlan  = hasMarathon ? daysUntilRacePlan(profile.marathon_date) : null
@@ -238,9 +238,39 @@ export default function BuildPhasePlan({ profile, stravaRuns = [], workoutLogs =
     return stravaLog ? 'easy' : (schedule[6] || 'rest')
   }, [monday, workoutLogs, stravaRuns, schedule])
 
+  // ── AI-driven effective schedule ──────────────────────────────
+  // For the current and next week, replace the base schedule with AI plan sessions.
+  // Option B: AI sets both day AND type — user's training_days are just a default.
+  const { effectiveSchedule, aiPlanActive } = useMemo(() => {
+    if (!aiPlan?.sessions?.length) return { effectiveSchedule: schedule, aiPlanActive: false }
+
+    const today       = new Date(); today.setHours(0, 0, 0, 0)
+    const currMonday  = getMondayOf(today)
+    const nextMonday  = new Date(currMonday); nextMonday.setDate(currMonday.getDate() + 7)
+    const isCurrentWeek = monday.getTime() === currMonday.getTime()
+    const isNextWeek    = monday.getTime() === nextMonday.getTime()
+
+    if (!isCurrentWeek && !isNextWeek) return { effectiveSchedule: schedule, aiPlanActive: false }
+
+    const aiSessions = aiPlan.sessions.filter(s =>
+      isNextWeek ? s.isNextWeek === true : !s.isNextWeek
+    )
+    if (!aiSessions.length) return { effectiveSchedule: schedule, aiPlanActive: false }
+
+    // Build all-rest base, place AI sessions on their days
+    const effective = {}
+    for (let i = 0; i < 7; i++) effective[i] = 'rest'
+    for (const s of aiSessions) {
+      if (s.dayOfWeek >= 0 && s.dayOfWeek <= 6 && s.type && s.type !== 'rest') {
+        effective[s.dayOfWeek] = s.type
+      }
+    }
+    return { effectiveSchedule: effective, aiPlanActive: true }
+  }, [aiPlan, schedule, monday])
+
   const displaySchedule = useMemo(() =>
-    computeWeekDisplay(schedule, weekLogs, profile, monday, prevWeekLastType),
-    [schedule, weekLogs, profile, monday, prevWeekLastType]
+    computeWeekDisplay(effectiveSchedule, weekLogs, profile, monday, prevWeekLastType),
+    [effectiveSchedule, weekLogs, profile, monday, prevWeekLastType]
   )
 
   const weekLabel = useMemo(() => {
@@ -353,13 +383,28 @@ export default function BuildPhasePlan({ profile, stravaRuns = [], workoutLogs =
         </div>
 
         {/* Week navigator */}
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: aiPlanActive ? 6 : 10 }}>
           <button onClick={() => setWeekOffset(o => o - 1)}
             style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--c-text-3)', padding: '4px 10px', fontSize: 20, lineHeight: 1 }}>‹</button>
           <span style={{ fontWeight: 600, fontSize: 13, color: 'var(--c-text-2)' }}>{weekLabel}</span>
           <button onClick={() => setWeekOffset(o => o + 1)}
             style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--c-text-3)', padding: '4px 10px', fontSize: 20, lineHeight: 1 }}>›</button>
         </div>
+
+        {/* AI-plan active indicator */}
+        {aiPlanActive && (
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: 6, marginBottom: 10,
+            background: 'var(--c-primary-dim)', border: '1px solid var(--c-primary)',
+            borderRadius: 8, padding: '5px 10px',
+          }}>
+            <span style={{ fontSize: 13 }}>🤖</span>
+            <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--c-primary)', flex: 1 }}>
+              KI-Plan aktiv
+              {aiPlan?.weekTheme ? ` — ${aiPlan.weekTheme}` : ''}
+            </span>
+          </div>
+        )}
 
         {/* Week summary strip */}
         <div style={{
