@@ -101,7 +101,9 @@ function useCoachIdentity(user) {
   return { coachName, firstName, avatarUrl }
 }
 
-export default function TodayTab({ user, profile, trainingPlan, completedWorkoutIds, onToggleComplete, workoutLogs, onLogAdded, onLogDeleted, stravaRuns = [], onConfirmRacePlan, aiPlan = null, aiPlanGenerating = false, lastPlanChange = null, onPlanChangeDismiss, pendingStravaFeedback = null, onStravaFeedback }) {
+export default function TodayTab({ user, profile, trainingPlan, completedWorkoutIds, onToggleComplete, workoutLogs, onLogAdded, onLogDeleted, stravaRuns = [], onConfirmRacePlan, aiPlan = null, aiPlanGenerating = false, lastPlanChange = null, onPlanChangeDismiss, pendingStravaQueue = [], onStravaFeedback }) {
+  // First item in the queue is the currently shown feedback card
+  const pendingStravaFeedback = pendingStravaQueue[0] ?? null
   const trainingMode = profile.training_mode || 'race'
   const hasMarathon = !!profile.marathon_date
 
@@ -264,6 +266,7 @@ export default function TodayTab({ user, profile, trainingPlan, completedWorkout
               user={user}
               run={pendingStravaFeedback.run}
               runWorkoutType={pendingStravaFeedback.log?.workout_type}
+              queuePosition={pendingStravaQueue.length > 1 ? pendingStravaQueue.length : null}
               onSubmit={onStravaFeedback}
               onDismiss={() => onStravaFeedback(null, null)}
             />
@@ -1045,7 +1048,7 @@ function RaceDayCountdown({ daysLeft, marathonName }) {
 }
 
 // ── Strava Feedback Card ───────────────────────────────────────────────────────
-function StravaFeedbackCard({ user, run, runWorkoutType, onSubmit, onDismiss }) {
+function StravaFeedbackCard({ user, run, runWorkoutType, queuePosition, onSubmit, onDismiss }) {
   const { coachName, avatarUrl } = useCoachIdentity(user)
   const [rpe, setRpe] = useState(null)
   const [notes, setNotes] = useState('')
@@ -1065,9 +1068,6 @@ function StravaFeedbackCard({ user, run, runWorkoutType, onSubmit, onDismiss }) 
     await onSubmit(rpe, notes.trim() || null, paceFeedback)
   }
 
-  const rpeLabels = ['😴','😌','🙂','💪','😤','🔥','💀']
-  const rpeValues = [1,   2,   4,   5,   7,   9,  10]
-
   return (
     <div style={{
       background: 'var(--c-card)', border: '1px solid var(--c-primary)',
@@ -1080,13 +1080,22 @@ function StravaFeedbackCard({ user, run, runWorkoutType, onSubmit, onDismiss }) 
         }}>
           <img src={avatarUrl} alt={coachName} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
         </div>
-        <div>
+        <div style={{ flex: 1 }}>
           <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--c-primary)' }}>{coachName}</div>
           <div style={{ fontSize: 13, color: 'var(--c-text)', fontWeight: 600 }}>
             Strava-Lauf importiert 🎉
           </div>
         </div>
-        <button onClick={onDismiss} style={{ marginLeft: 'auto', background: 'none', border: 'none', color: 'var(--c-text-3)', fontSize: 18, cursor: 'pointer', lineHeight: 1 }}>×</button>
+        {/* Queue progress badge */}
+        {queuePosition > 1 && (
+          <div style={{
+            fontSize: 11, fontWeight: 700, color: 'var(--c-primary)',
+            background: 'var(--c-primary-dim)', borderRadius: 20, padding: '3px 8px', flexShrink: 0,
+          }}>
+            {queuePosition} verbleibend
+          </div>
+        )}
+        <button onClick={onDismiss} style={{ background: 'none', border: 'none', color: 'var(--c-text-3)', fontSize: 18, cursor: 'pointer', lineHeight: 1 }}>×</button>
       </div>
 
       {/* Run summary */}
@@ -1099,19 +1108,17 @@ function StravaFeedbackCard({ user, run, runWorkoutType, onSubmit, onDismiss }) 
         {paceStr && <span>⚡ <strong>{paceStr}/km</strong></span>}
       </div>
 
-      {/* RPE question */}
-      <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--c-text-2)', marginBottom: 10 }}>
-        Wie war die Einheit?
+      {/* RPE question — 1-10 slider */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+        <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--c-text-2)' }}>Wie anstrengend?</div>
+        {rpe && (
+          <span style={{ fontSize: 13, fontWeight: 700, color: rpeColor(rpe) }}>
+            {rpe}/10 — {rpeLabel(rpe)}
+          </span>
+        )}
       </div>
-      <div style={{ display: 'flex', gap: 6, marginBottom: 14, flexWrap: 'wrap' }}>
-        {rpeLabels.map((label, i) => (
-          <button key={i} onClick={() => setRpe(rpeValues[i])} style={{
-            flex: 1, minWidth: 36, padding: '8px 4px', borderRadius: 8, fontSize: 18,
-            border: `2px solid ${rpe === rpeValues[i] ? 'var(--c-primary)' : 'var(--c-border)'}`,
-            background: rpe === rpeValues[i] ? 'var(--c-primary-dim)' : 'var(--c-bg)',
-            cursor: 'pointer', transition: 'all 0.15s',
-          }}>{label}</button>
-        ))}
+      <div style={{ marginBottom: 14 }}>
+        <RpeSlider value={rpe} onChange={setRpe} />
       </div>
 
       {/* Optional notes */}

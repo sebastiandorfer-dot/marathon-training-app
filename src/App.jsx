@@ -17,6 +17,24 @@ import ProfileTab from './components/tabs/ProfileTab'
 import FitnessTab from './components/tabs/FitnessTab'
 import { exchangeStravaCode, getValidToken, fetchAllStravaRuns, makeStravaLogRow, filterNewStravaRuns, classifyRunType } from './utils/stravaUtils'
 
+/**
+ * Build an RPE feedback queue from a batch of newly inserted Strava runs.
+ * Only includes runs from the last 14 days, sorted newest first, max 3.
+ */
+function buildFeedbackQueue(stravaRuns, insertedLogs) {
+  const cutoff = Date.now() - 14 * 24 * 60 * 60 * 1000
+  const recent = [...stravaRuns]
+    .filter(r => new Date(r.start_date).getTime() > cutoff)
+    .sort((a, b) => new Date(b.start_date) - new Date(a.start_date))
+    .slice(0, 3)
+
+  return recent.map(r => {
+    const stravaId = String(r.strava_id ?? r.id)
+    const log = insertedLogs.find(l => l.notes === `strava:${stravaId}`)
+    return log ? { log, run: r } : null
+  }).filter(Boolean)
+}
+
 // Views: 'loading' | 'auth' | 'onboarding' | 'generating' | 'app'
 export default function App() {
   const [view, setView] = useState('loading')
@@ -39,7 +57,7 @@ export default function App() {
   const [lastPlanChange, setLastPlanChange] = useState(null) // reason shown as toast
   const aiPlanRef = useRef(null)       // mirrors aiPlan, avoids stale closures
   const workoutLogsRef = useRef([])    // mirrors workoutLogs, for AI check after upsert
-  const [pendingStravaFeedback, setPendingStravaFeedback] = useState(null) // {log, run} awaiting RPE
+  const [pendingStravaQueue, setPendingStravaQueue] = useState([]) // [{log, run}] queue awaiting RPE
 
   // ── Merge strava runs into workout logs (single source of truth for all tabs) ──
   const allWorkoutLogs = useMemo(() => {
@@ -183,10 +201,7 @@ export default function App() {
         if (inserted?.length) {
           mergedLogs = [...existingLogs, ...inserted]
             .sort((a, b) => new Date(b.workout_date) - new Date(a.workout_date))
-          const newestRun = [...toInsert].sort((a, b) =>
-            new Date(b.start_date) - new Date(a.start_date))[0]
-          const newestLog = inserted.find(l => l.notes === `strava:${newestRun.strava_id}`)
-          if (newestLog) setPendingStravaFeedback({ log: newestLog, run: newestRun })
+          setPendingStravaQueue(buildFeedbackQueue(toInsert, inserted))
         }
       }
 
@@ -442,9 +457,7 @@ export default function App() {
           .sort((a, b) => new Date(b.workout_date) - new Date(a.workout_date))
         workoutLogsRef.current = merged
         setWorkoutLogs(merged)
-        const newestRun = [...toInsert].sort((a, b) => new Date(b.start_date) - new Date(a.start_date))[0]
-        const newestLog = inserted.find(l => l.notes === `strava:${newestRun.strava_id}`)
-        if (newestLog) setPendingStravaFeedback({ log: newestLog, run: newestRun })
+        setPendingStravaQueue(buildFeedbackQueue(toInsert, inserted))
       }
     }
 
@@ -496,19 +509,21 @@ export default function App() {
       const cutoff = Date.now() - 7 * 24 * 60 * 60 * 1000 // only last 7 days
       const recentRuns = runs.filter(r => new Date(r.start_date).getTime() > cutoff)
       const newRuns = filterNewStravaRuns(recentRuns, workoutLogsRef.current)
-      let newestLog = null
+      const syncInserted = []
+      const syncRuns = []
       for (const r of newRuns) {
         const row = makeStravaLogRow(r, currentProfile.id, currentProfile)
         const { data: inserted } = await supabase.from('workout_logs').insert(row).select().single()
         if (inserted) {
           workoutLogsRef.current = [inserted, ...workoutLogsRef.current]
           setWorkoutLogs(prev => [inserted, ...prev])
-          if (!newestLog || new Date(r.start_date) > new Date(newestLog.run.start_date)) {
-            newestLog = { log: inserted, run: r }
-          }
+          syncInserted.push(inserted)
+          syncRuns.push(r)
         }
       }
-      if (newestLog) setPendingStravaFeedback(newestLog)
+      if (syncInserted.length > 0) {
+        setPendingStravaQueue(buildFeedbackQueue(syncRuns, syncInserted))
+      }
       setStravaRuns(merged)
       const now = new Date().toISOString()
       await supabase.from('profiles').update({ strava_last_sync: now }).eq('id', currentProfile.id)
@@ -634,12 +649,13 @@ export default function App() {
               aiPlanGenerating={aiPlanGenerating}
               lastPlanChange={lastPlanChange}
               onPlanChangeDismiss={() => setLastPlanChange(null)}
-              pendingStravaFeedback={pendingStravaFeedback}
+              pendingStravaQueue={pendingStravaQueue}
               onStravaFeedback={async (rpe, notes, paceFeedback) => {
-                if (!pendingStravaFeedback) return
-                // rpe=null means the user dismissed — just clear the card, no DB write
+                const current = pendingStravaQueue[0]
+                if (!current) return
+                // rpe=null means the user dismissed — just advance the queue, no DB write
                 if (rpe != null) {
-                  const { log } = pendingStravaFeedback
+                  const { log } = current
                   const updateFields = { rpe, notes: notes || log.notes }
                   if (paceFeedback) updateFields.pace_feedback = paceFeedback
                   const { data: updated } = await supabase
@@ -648,17 +664,21 @@ export default function App() {
                   if (updated) {
                     workoutLogsRef.current = workoutLogsRef.current.map(l => l.id === updated.id ? updated : l)
                     setWorkoutLogs(prev => prev.map(l => l.id === updated.id ? updated : l))
-                    const apiKey = import.meta.env.VITE_ANTHROPIC_API_KEY
-                    if (apiKey && profile) {
-                      generateAIPlan(profile, workoutLogsRef.current, stravaRuns, apiKey)
-                        .then(plan => {
-                          const enriched = { ...plan, lastChangeReason: 'Einheit bewertet — Plan angepasst' }
-                          setAiPlan(enriched); aiPlanRef.current = enriched
-                        }).catch(() => {})
+                    // Regenerate plan only after the last item in the queue
+                    if (pendingStravaQueue.length <= 1) {
+                      const apiKey = import.meta.env.VITE_ANTHROPIC_API_KEY
+                      if (apiKey && profile) {
+                        generateAIPlan(profile, workoutLogsRef.current, stravaRuns, apiKey)
+                          .then(plan => {
+                            const enriched = { ...plan, lastChangeReason: 'Einheiten bewertet — Plan angepasst' }
+                            setAiPlan(enriched); aiPlanRef.current = enriched
+                          }).catch(() => {})
+                      }
                     }
                   }
                 }
-                setPendingStravaFeedback(null)
+                // Advance the queue
+                setPendingStravaQueue(q => q.slice(1))
               }}
             />
           )}
