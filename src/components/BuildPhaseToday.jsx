@@ -310,19 +310,23 @@ export default function BuildPhaseToday({
                   {planMeta.desc}
                 </div>
               )}
-              {/* Pace target range for tempo/interval — shown before the workout */}
-              {!isRestDay && !alreadyLogged && (effectiveTodayType === 'tempo' || effectiveTodayType === 'interval') && (() => {
+              {/* Pace target range — shown for all runable types before the workout */}
+              {!isRestDay && !alreadyLogged && (() => {
                 const range = getPaceTargetRange(profile, effectiveTodayType)
-                return range ? (
+                if (!range) return null
+                // Skip if AI session already provides a pace (shown in workout hints below)
+                if (workoutHint?.pace) return null
+                const isHardType = effectiveTodayType === 'tempo' || effectiveTodayType === 'interval'
+                return (
                   <div style={{
                     display: 'inline-flex', alignItems: 'center', gap: 6, marginTop: 6,
                     background: planMeta.color + '18', border: `1px solid ${planMeta.color}44`,
                     borderRadius: 8, padding: '4px 10px', fontSize: 12, fontWeight: 700,
                   }}>
-                    <span>⚡</span>
+                    <span>{isHardType ? '⚡' : '🎯'}</span>
                     <span style={{ color: planMeta.color }}>Zielpace {range}</span>
                   </div>
-                ) : null
+                )
               })()}
               {alreadyLogged && todayEntry?.logs?.[0] && (
                 <div style={{ fontSize: 12, color: 'var(--c-text-3)', marginTop: 4 }}>

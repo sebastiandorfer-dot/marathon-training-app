@@ -2,7 +2,7 @@
 // Build Phase Scheduling Utilities
 // Shared between BuildPhasePlan and BuildPhaseToday
 // ============================================================
-import { getMondayOf } from './planUtils'
+import { getMondayOf, daysUntilRacePlan } from './planUtils'
 export { getMondayOf }
 
 /** Workout hardness: 0=rest/recovery, 1=easy, 2=tempo, 3=long/interval */
@@ -22,13 +22,14 @@ export const isHard = t => (HARDNESS[t] || 0) >= 2
  *
  * @param {number} count - sessions per week (1–7)
  * @param {string} level - 'beginner' | 'intermediate' | 'advanced'
- * @param {number} recentFatigue - avg RPE of last 4 logs (1–3), null if unknown
+ * @param {number} recentFatigue - avg RPE of last 4 logs (1–10), null if unknown
+ * @param {number|null} weeksToRacePlan - weeks until 18-week race plan starts, null if no marathon date
  */
-export function getWeeklyTypes(count, level = 'intermediate', recentFatigue = null) {
+export function getWeeklyTypes(count, level = 'intermediate', recentFatigue = null, weeksToRacePlan = null) {
   const n = Math.min(Math.max(count, 1), 7)
 
-  // If athlete is fatigued (avg RPE ≥ 2.5), swap hardest session for recovery
-  const fatigued = recentFatigue !== null && recentFatigue >= 2.5
+  // If athlete is fatigued (avg RPE ≥ 6.5 on 1–10 scale), swap hardest session for recovery
+  const fatigued = recentFatigue !== null && recentFatigue >= 6.5
 
   const templates = {
     beginner: {
@@ -71,6 +72,25 @@ export function getWeeklyTypes(count, level = 'intermediate', recentFatigue = nu
     if (hardIdx) {
       types = [...types]
       types[hardIdx.i] = 'recovery'
+    }
+  }
+
+  // Taper override: reduce intensity as race plan approaches
+  // weeksToRacePlan = weeks until the 18-week race plan starts
+  if (weeksToRacePlan !== null && weeksToRacePlan <= 3) {
+    types = [...types]
+    if (weeksToRacePlan <= 2) {
+      // Strong taper (final 2 weeks): intervals → easy, tempo → recovery
+      // Keep long run — it builds the aerobic base right to the handoff
+      for (let i = 0; i < types.length; i++) {
+        if (types[i] === 'interval') types[i] = 'easy'
+        if (types[i] === 'tempo')    types[i] = 'recovery'
+      }
+    } else {
+      // Moderate taper (3 weeks out): intervals → tempo, preserve tempo
+      for (let i = 0; i < types.length; i++) {
+        if (types[i] === 'interval') types[i] = 'tempo'
+      }
     }
   }
 
@@ -196,8 +216,13 @@ export function buildBaseSchedule(profile, workoutLogs = []) {
     ? recentRpeLogs.reduce((s, l) => s + l.rpe, 0) / recentRpeLogs.length
     : null
 
+  // Compute weeks to race plan start for taper-aware type distribution
+  const weeksToRacePlan = profile.marathon_date
+    ? Math.ceil(daysUntilRacePlan(profile.marathon_date) / 7)
+    : null
+
   const level = profile.level || 'intermediate'
-  const types = getWeeklyTypes(Math.max(1, sessionCount), level, recentFatigue)
+  const types = getWeeklyTypes(Math.max(1, sessionCount), level, recentFatigue, weeksToRacePlan)
 
   const base = {}
   for (let i = 0; i < 7; i++) base[i] = 'rest'
@@ -211,6 +236,15 @@ export const AUTO_TYPES = new Set(['easy', 'tempo', 'long', 'recovery', 'rest'])
 
 /** Load schedule from profile or rebuild if stale. Pass workoutLogs for personalization. */
 export function initSchedule(profile, workoutLogs = []) {
+  // In taper zone (≤ 3 weeks to race plan): always rebuild so taper types are applied.
+  // A stored schedule set weeks ago would otherwise ignore the intensity reduction.
+  const weeksToRacePlan = profile.marathon_date
+    ? Math.ceil(daysUntilRacePlan(profile.marathon_date) / 7)
+    : null
+  if (weeksToRacePlan !== null && weeksToRacePlan <= 3) {
+    return buildBaseSchedule(profile, workoutLogs)
+  }
+
   if (
     profile.build_phase_schedule &&
     typeof profile.build_phase_schedule === 'object' &&

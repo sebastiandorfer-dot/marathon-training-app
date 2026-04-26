@@ -220,9 +220,8 @@ export function planCompletionPct(plan, completedIds) {
  *   pace instead of the profile's stored pace. Used when calibrating the race plan with the
  *   user's actual fitness measured during the build phase.
  */
-export async function generateTrainingPlan(profile, options = {}) {
-  const apiKey = import.meta.env.VITE_ANTHROPIC_API_KEY
-  if (!apiKey) throw new Error('Anthropic API key not configured.')
+export async function generateTrainingPlan(profile, options = {}, supabaseClient) {
+  if (!supabaseClient) throw new Error('Supabase Client fehlt')
 
   const availableDays   = profile.training_days || []
   const blockedDays     = profile.blocked_days  || []
@@ -336,28 +335,17 @@ RULES:
 
 Output ONLY the raw JSON. Start with { end with }.`
 
-  const response = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-api-key': apiKey,
-      'anthropic-version': '2023-06-01',
-      'anthropic-dangerous-direct-browser-access': 'true',
-    },
-    body: JSON.stringify({
+  const { data: proxyData, error: proxyError } = await supabaseClient.functions.invoke('ai-proxy', {
+    body: {
       model: 'claude-sonnet-4-5',
       max_tokens: 16000,
       messages: [{ role: 'user', content: prompt }],
-    }),
+    },
   })
 
-  if (!response.ok) {
-    const err = await response.json().catch(() => ({}))
-    throw new Error(err?.error?.message || `API error ${response.status}`)
-  }
+  if (proxyError) throw new Error(proxyError.message || 'AI-Proxy Fehler')
 
-  const result = await response.json()
-  const text = result.content?.[0]?.text || ''
+  const text = proxyData?.content?.[0]?.text || ''
 
   // Try to parse JSON — handle markdown code fences if present
   let planJson

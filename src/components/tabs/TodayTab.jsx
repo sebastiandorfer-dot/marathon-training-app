@@ -826,9 +826,6 @@ function TrackingObserverCard({ workoutLogs, profile }) {
     if (workoutLogs.length < 3) return
     if (workoutLogs.length === analyzedCountRef.current) return
 
-    const apiKey = import.meta.env.VITE_ANTHROPIC_API_KEY
-    if (!apiKey) return
-
     analyzedCountRef.current = workoutLogs.length // mark as analyzing this count
     setLoading(true)
 
@@ -836,20 +833,12 @@ function TrackingObserverCard({ workoutLogs, profile }) {
       .sort((a, b) => new Date(b.workout_date) - new Date(a.workout_date))
       .slice(0, 10)
 
-    const RPE_LABELS = { 1: 'leicht', 2: 'moderat', 3: 'sehr hart' }
     const logsText = sorted.map(l =>
-      `${l.workout_date}: ${l.workout_type}${l.distance_km ? ` ${l.distance_km}km` : ''}${l.duration_min ? ` ${l.duration_min}min` : ''}${l.rpe ? ` (${RPE_LABELS[l.rpe]})` : ''}`
+      `${l.workout_date}: ${l.workout_type}${l.distance_km ? ` ${l.distance_km}km` : ''}${l.duration_min ? ` ${l.duration_min}min` : ''}${l.rpe ? ` (RPE ${l.rpe}/10)` : ''}`
     ).join('\n')
 
-    fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': apiKey,
-        'anthropic-version': '2023-06-01',
-        'anthropic-dangerous-direct-browser-access': 'true',
-      },
-      body: JSON.stringify({
+    supabase.functions.invoke('ai-proxy', {
+      body: {
         model: 'claude-haiku-4-5-20251001',
         max_tokens: 200,
         messages: [{
@@ -863,11 +852,10 @@ Level: ${profile.level || 'unbekannt'}
 Beobachte: Konsistenz, Volumen-Trend, Intensitätsmuster, auffällige Muster.
 Antworte mit JSON: {"observation": "...", "emoji": "📈|📉|⚡|💤|🔥|✅"}`,
         }],
-      }),
+      },
     })
-    .then(r => r.json())
-    .then(data => {
-      const text = data.content?.[0]?.text || ''
+    .then(({ data }) => {
+      const text = data?.content?.[0]?.text || ''
       const match = text.match(/\{[\s\S]*\}/)
       if (match) setInsight(JSON.parse(match[0]))
     })

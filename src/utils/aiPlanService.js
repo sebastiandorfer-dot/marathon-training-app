@@ -201,8 +201,8 @@ function getWeekKey(date) {
  * - Pace targets scaled to confidence level
  * - Explanation of any adjustments
  */
-export async function generateAIPlan(profile, workoutLogs, stravaRuns = [], apiKey) {
-  if (!apiKey) throw new Error('Anthropic API Key fehlt')
+export async function generateAIPlan(profile, workoutLogs, stravaRuns = [], supabaseClient) {
+  if (!supabaseClient) throw new Error('Supabase Client fehlt')
 
   const confidence = getPaceConfidence(workoutLogs, stravaRuns)
   const { hasPause, pauseDays } = detectPause(workoutLogs, profile.sessions_per_week || 3)
@@ -266,6 +266,22 @@ export async function generateAIPlan(profile, workoutLogs, stravaRuns = [], apiK
     high:   `Viele Daten (${confidence.dataPoints} Datenpunkte) — zeige konkrete Zielpace mit nur ±5 Sek Toleranz`,
   }[confidence.level]
 
+  // Weeks until 18-week race plan starts (taper awareness)
+  const RACE_PLAN_WEEKS = 18
+  const weeksToRacePlan = profile.marathon_date
+    ? Math.ceil((new Date(profile.marathon_date) - new Date()) / (1000 * 60 * 60 * 24 * 7)) - RACE_PLAN_WEEKS
+    : null
+  const taperNote = weeksToRacePlan !== null && weeksToRacePlan <= 4
+    ? [
+        `Noch ${Math.max(0, weeksToRacePlan)} Wochen bis Rennplan-Start (18-Wochen-Wettkampfphase)`,
+        weeksToRacePlan <= 0  ? '⚠️ Übergang zum Rennplan überfällig — Aufbauphase läuft über Zeit, Belastung reduzieren' : null,
+        weeksToRacePlan === 1 ? '→ Letzte Aufbauwoche: Nur Easy-Läufe + Long Run, keine harten Einheiten mehr' : null,
+        weeksToRacePlan === 2 ? '→ Starke Tapering: Intervalle und Tempo durch Easy/Regeneration ersetzen' : null,
+        weeksToRacePlan === 3 ? '→ Moderate Tapering: Intervalle durch Tempo ersetzen, Gesamtbelastung leicht senken' : null,
+        weeksToRacePlan === 4 ? '→ Letzte Qualitätswoche: Intensität noch normal, Volumen leicht zurücknehmen' : null,
+      ].filter(Boolean).join('\n')
+    : null
+
   const today = new Date()
   const dayOfWeek = today.getDay() === 0 ? 6 : today.getDay() - 1 // 0=Mo ... 6=So
   const remainingDays = (profile.training_days || []).filter(d => d > dayOfWeek)
@@ -299,6 +315,7 @@ TRAININGSBELASTUNG:
 - Veränderung: ${prev4AvgLoad > 0 ? (((currentWeekLoad - prev4AvgLoad) / prev4AvgLoad) * 100).toFixed(0) + '%' : 'keine Vergleichsdaten'}
 ${hasPause ? `- ⚠️ PAUSE ERKANNT: ${pauseDays} Tage ohne Training — sanfterer Wiedereinstieg nötig` : ''}
 ${voluntaryRestNote ? `- ℹ️ ${voluntaryRestNote}` : ''}
+${taperNote ? `\nTAPERING-HINWEIS:\n${taperNote}\n→ Passe Sessions entsprechend an: Intensität und Volumen reduzieren, Regeneration priorisieren.` : ''}
 
 LETZTE EINHEITEN:
 ${logsText || 'Noch keine Einheiten geloggt'}
@@ -340,28 +357,18 @@ Antworte NUR mit validem JSON (kein Markdown, keine Erklärung davor/danach):
   ]
 }`
 
-  const response = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-api-key': apiKey,
-      'anthropic-version': '2023-06-01',
-      'anthropic-dangerous-direct-browser-access': 'true',
-    },
-    body: JSON.stringify({
+  const { data: proxyData, error: proxyError } = await supabaseClient.functions.invoke('ai-proxy', {
+    body: {
       model: 'claude-haiku-4-5-20251001',
       max_tokens: 1200,
       messages: [{ role: 'user', content: prompt }],
-    }),
+    },
   })
 
-  if (!response.ok) {
-    const err = await response.json().catch(() => ({}))
-    throw new Error(err?.error?.message || `API Fehler ${response.status}`)
-  }
+  if (proxyError) throw new Error(proxyError.message || 'AI-Proxy Fehler')
+  if (!proxyData?.content?.[0]?.text) throw new Error('Ungültige Antwort vom AI-Proxy')
 
-  const data = await response.json()
-  const text = data.content[0].text.trim()
+  const text = proxyData.content[0].text.trim()
 
   // Extract JSON (handle potential markdown wrapping)
   const jsonMatch = text.match(/\{[\s\S]*\}/)

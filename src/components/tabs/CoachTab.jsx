@@ -203,24 +203,21 @@ COACHING-RICHTLINIEN:
     setStreaming(true)
     setStreamingText('')
 
-    const apiKey = import.meta.env.VITE_ANTHROPIC_API_KEY
-    if (!apiKey) {
-      setError('Anthropic API Key fehlt.')
-      setStreaming(false)
-      return
-    }
-
     const controller = new AbortController()
     abortRef.current = controller
 
     try {
-      const response = await fetch('https://api.anthropic.com/v1/messages', {
+      // Get the current session token to authenticate with the Edge Function
+      const { data: { session } } = await supabase.auth.getSession()
+      const token = session?.access_token
+      if (!token) throw new Error('Nicht eingeloggt')
+
+      const fnUrl = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/ai-proxy`
+      const response = await fetch(fnUrl, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'x-api-key': apiKey,
-          'anthropic-version': '2023-06-01',
-          'anthropic-dangerous-direct-browser-access': 'true',
+          'Authorization': `Bearer ${token}`,
         },
         body: JSON.stringify({
           model: 'claude-sonnet-4-6',

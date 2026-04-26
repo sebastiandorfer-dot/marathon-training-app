@@ -83,6 +83,15 @@ export default function App() {
       .sort((a, b) => new Date(b.workout_date) - new Date(a.workout_date))
   }, [workoutLogs, stravaRuns, profile])
 
+  // ── Persist AI plan to profiles.ai_plan ───────────────────────
+  const saveAiPlan = useCallback(async (plan, userId) => {
+    try {
+      await supabase.from('profiles').update({ ai_plan: plan }).eq('id', userId)
+    } catch (err) {
+      console.warn('Failed to save AI plan:', err)
+    }
+  }, [])
+
   // ── Boot: check auth session + Strava OAuth callback ─────────
   useEffect(() => {
     // Handle Strava OAuth callback (?code=xxx in URL)
@@ -208,23 +217,28 @@ export default function App() {
       setWorkoutLogs(mergedLogs)
       workoutLogsRef.current = mergedLogs
 
-      // Generate initial AI plan in the background (non-blocking)
-      const apiKey = import.meta.env.VITE_ANTHROPIC_API_KEY
+      // Load stored AI plan — use it directly, skip generation if still valid
+      const storedPlan = activeProfile.ai_plan || null
+      if (storedPlan) {
+        setAiPlan(storedPlan)
+        aiPlanRef.current = storedPlan
+      }
+
+      // Only regenerate if no stored plan or training significantly deviated
       const logs = mergedLogs
       const runs = runsRes.data || []
-      if (apiKey && activeProfile) {
-        const { should } = shouldRegeneratePlan(null, logs, null, activeProfile)
-        if (should) {
-          setAiPlanGenerating(true)
-          generateAIPlan(activeProfile, logs, runs, apiKey)
-            .then(plan => {
-              const enriched = { ...plan, lastChangeReason: null } // initial plan — no prior change
-              setAiPlan(enriched)
-              aiPlanRef.current = enriched
-            })
-            .catch(err => console.warn('Initial AI plan failed:', err))
-            .finally(() => setAiPlanGenerating(false))
-        }
+      const { should } = shouldRegeneratePlan(null, logs, storedPlan, activeProfile)
+      if (should) {
+        setAiPlanGenerating(true)
+        generateAIPlan(activeProfile, logs, runs, supabase)
+          .then(plan => {
+            const enriched = { ...plan, lastChangeReason: null }
+            setAiPlan(enriched)
+            aiPlanRef.current = enriched
+            saveAiPlan(enriched, activeProfile.id)
+          })
+          .catch(err => console.warn('Initial AI plan failed:', err))
+          .finally(() => setAiPlanGenerating(false))
       }
 
       setView('app')
@@ -261,7 +275,7 @@ export default function App() {
         if (profileError) throw profileError
         setProfile(savedProfile)
 
-        const planData = await generateTrainingPlan(savedProfile)
+        const planData = await generateTrainingPlan(savedProfile, {}, supabase)
         const { data: savedPlan, error: planError } = await supabase
           .from('training_plans')
           .upsert({ user_id: user.id, plan_data: planData }, { onConflict: 'user_id' })
@@ -304,7 +318,7 @@ export default function App() {
     if (!onboardingData || !profile) return
     setGenerateError('')
     try {
-      const planData = await generateTrainingPlan(profile)
+      const planData = await generateTrainingPlan(profile, {}, supabase)
       const { data: savedPlan, error } = await supabase
         .from('training_plans')
         .upsert({ user_id: user.id, plan_data: planData }, { onConflict: 'user_id' })
@@ -364,9 +378,6 @@ export default function App() {
     setWorkoutLogs(updatedLogs)
 
     // 2. AI plan regeneration check
-    const apiKey = import.meta.env.VITE_ANTHROPIC_API_KEY
-    if (!apiKey) return
-
     // Guard against concurrent generation — second call would overwrite first with stale context
     if (aiPlanRef.current?._generating) return
 
@@ -374,12 +385,13 @@ export default function App() {
     if (should) {
       aiPlanRef.current = { ...aiPlanRef.current, _generating: true }
       setAiPlanGenerating(true)
-      generateAIPlan(profile, updatedLogs, stravaRuns, apiKey)
+      generateAIPlan(profile, updatedLogs, stravaRuns, supabase)
         .then(plan => {
           const enriched = { ...plan, lastChangeReason: reason }
           setAiPlan(enriched)
           aiPlanRef.current = enriched
           setLastPlanChange(reason) // trigger toast
+          saveAiPlan(enriched, user.id)
         })
         .catch(err => {
           // Clear generating flag so next log can retry
@@ -416,19 +428,17 @@ export default function App() {
       // Check if any planning-relevant field changed
       const changed = prev && REGEN_FIELDS.some(f => JSON.stringify(updatedProfile[f]) !== JSON.stringify(prev[f]))
       if (changed) {
-        const apiKey = import.meta.env.VITE_ANTHROPIC_API_KEY
-        if (apiKey) {
-          setAiPlanGenerating(true)
-          generateAIPlan(updatedProfile, workoutLogsRef.current, stravaRuns, apiKey)
-            .then(plan => {
-              const enriched = { ...plan, lastChangeReason: 'Profil aktualisiert — Plan neu berechnet' }
-              setAiPlan(enriched)
-              aiPlanRef.current = enriched
-              setLastPlanChange('Profil aktualisiert — Plan neu berechnet')
-            })
-            .catch(err => console.warn('AI plan regen after profile update failed:', err))
-            .finally(() => setAiPlanGenerating(false))
-        }
+        setAiPlanGenerating(true)
+        generateAIPlan(updatedProfile, workoutLogsRef.current, stravaRuns, supabase)
+          .then(plan => {
+            const enriched = { ...plan, lastChangeReason: 'Profil aktualisiert — Plan neu berechnet' }
+            setAiPlan(enriched)
+            aiPlanRef.current = enriched
+            setLastPlanChange('Profil aktualisiert — Plan neu berechnet')
+            saveAiPlan(enriched, updatedProfile.id)
+          })
+          .catch(err => console.warn('AI plan regen after profile update failed:', err))
+          .finally(() => setAiPlanGenerating(false))
       }
       return updatedProfile
     })
@@ -461,15 +471,15 @@ export default function App() {
       }
     }
 
-    const apiKey = import.meta.env.VITE_ANTHROPIC_API_KEY
-    if (!apiKey || !profile) return
+    if (!profile) return
     setAiPlanGenerating(true)
-    generateAIPlan(profile, workoutLogsRef.current, newRuns, apiKey)
+    generateAIPlan(profile, workoutLogsRef.current, newRuns, supabase)
       .then(plan => {
         const enriched = { ...plan, lastChangeReason: 'Strava synchronisiert — Plan aktualisiert' }
         setAiPlan(enriched)
         aiPlanRef.current = enriched
         setLastPlanChange('Neue Strava-Daten — Plan angepasst')
+        saveAiPlan(enriched, profile.id)
       })
       .catch(err => console.warn('AI plan regen after Strava sync failed:', err))
       .finally(() => setAiPlanGenerating(false))
@@ -529,16 +539,14 @@ export default function App() {
       await supabase.from('profiles').update({ strava_last_sync: now }).eq('id', currentProfile.id)
       setProfile(p => p ? { ...p, strava_last_sync: now } : p)
       // Trigger AI plan regen with fresh data
-      const apiKey = import.meta.env.VITE_ANTHROPIC_API_KEY
-      if (apiKey) {
-        generateAIPlan(currentProfile, workoutLogsRef.current, merged, apiKey)
-          .then(plan => {
-            const enriched = { ...plan, lastChangeReason: 'Strava synchronisiert — Plan aktualisiert' }
-            setAiPlan(enriched)
-            aiPlanRef.current = enriched
-          })
-          .catch(() => {})
-      }
+      generateAIPlan(currentProfile, workoutLogsRef.current, merged, supabase)
+        .then(plan => {
+          const enriched = { ...plan, lastChangeReason: 'Strava synchronisiert — Plan aktualisiert' }
+          setAiPlan(enriched)
+          aiPlanRef.current = enriched
+          saveAiPlan(enriched, currentProfile.id)
+        })
+        .catch(() => {})
     } catch (err) {
       console.warn('Auto Strava sync failed:', err)
     }
@@ -589,7 +597,7 @@ export default function App() {
     const vo2max           = calculateVO2max(stravaRuns, maxHR)
     const predictedPaceSec = predictMarathonPaceFromVO2max(vo2max)
     try {
-      const planData = await generateTrainingPlan(profile, { overridePaceSec: predictedPaceSec || null })
+      const planData = await generateTrainingPlan(profile, { overridePaceSec: predictedPaceSec || null }, supabase)
       const { data, error } = await supabase.from('training_plans')
         .upsert({ user_id: user.id, plan_data: planData }, { onConflict: 'user_id' })
         .select().single()
@@ -666,14 +674,12 @@ export default function App() {
                     setWorkoutLogs(prev => prev.map(l => l.id === updated.id ? updated : l))
                     // Regenerate plan only after the last item in the queue
                     if (pendingStravaQueue.length <= 1) {
-                      const apiKey = import.meta.env.VITE_ANTHROPIC_API_KEY
-                      if (apiKey && profile) {
-                        generateAIPlan(profile, workoutLogsRef.current, stravaRuns, apiKey)
-                          .then(plan => {
-                            const enriched = { ...plan, lastChangeReason: 'Einheiten bewertet — Plan angepasst' }
-                            setAiPlan(enriched); aiPlanRef.current = enriched
-                          }).catch(() => {})
-                      }
+                      generateAIPlan(profile, workoutLogsRef.current, stravaRuns, supabase)
+                        .then(plan => {
+                          const enriched = { ...plan, lastChangeReason: 'Einheiten bewertet — Plan angepasst' }
+                          setAiPlan(enriched); aiPlanRef.current = enriched
+                          saveAiPlan(enriched, user.id)
+                        }).catch(() => {})
                     }
                   }
                 }

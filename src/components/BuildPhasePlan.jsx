@@ -17,6 +17,7 @@ import {
   getWeeklyTypes,
   hasConflict,
 } from '../utils/buildPhaseUtils'
+import { getPaceTargetRange } from '../utils/stravaUtils'
 
 const DAYS_SHORT = ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So']
 
@@ -457,6 +458,40 @@ export default function BuildPhasePlan({ profile, stravaRuns = [], workoutLogs =
         </p>
       </div>
 
+      {/* Taper banner — shown 3 weeks before race plan starts */}
+      {weeksToRacePlan !== null && weeksToRacePlan <= 3 && weeksToRacePlan >= 0 && (
+        <div style={{
+          background: weeksToRacePlan <= 1 ? '#ff6b3522' : '#f59e0b22',
+          border: `1px solid ${weeksToRacePlan <= 1 ? '#ff6b35' : '#f59e0b'}44`,
+          borderRadius: 12, padding: '12px 16px',
+          display: 'flex', gap: 12, alignItems: 'flex-start',
+        }}>
+          <span style={{ fontSize: 20, lineHeight: 1 }}>
+            {weeksToRacePlan <= 1 ? '🏁' : '📉'}
+          </span>
+          <div>
+            <div style={{ fontWeight: 700, fontSize: 13, color: weeksToRacePlan <= 1 ? '#ff6b35' : '#f59e0b', marginBottom: 2 }}>
+              {weeksToRacePlan === 0
+                ? 'Rennplan startet diese Woche!'
+                : weeksToRacePlan === 1
+                  ? 'Letzte Aufbauwoche'
+                  : weeksToRacePlan === 2
+                    ? 'Starke Tapering-Phase'
+                    : 'Moderate Tapering-Phase'}
+            </div>
+            <div style={{ fontSize: 12, color: 'var(--c-text-2)', lineHeight: 1.5 }}>
+              {weeksToRacePlan === 0
+                ? 'Dein 18-Wochen-Marathonplan beginnt — wechsle bald in den Rennmodus.'
+                : weeksToRacePlan === 1
+                  ? 'Nur noch Easy-Läufe und Long Run. Keine harten Einheiten mehr vor dem Rennplan.'
+                  : weeksToRacePlan === 2
+                    ? 'Intensität stark reduziert — Intervalle und Tempo sind durch Easy/Regeneration ersetzt.'
+                    : 'Intervalle sind durch Tempo ersetzt — Belastung wird schrittweise zurückgefahren.'}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Weekly schedule */}
       <div>
         {/* Header row */}
@@ -631,6 +666,18 @@ export default function BuildPhasePlan({ profile, stravaRuns = [], workoutLogs =
                               @ {s.pace}
                             </div>
                           ) : null
+                        })()}
+                        {/* Fallback pace range — when AI hasn't provided one */}
+                        {!isRest && !isMissed && (() => {
+                          const aiPace = aiPlanActive && aiSessionByDay[dayIdx]?.pace
+                          if (aiPace) return null
+                          const range = getPaceTargetRange(profile, type)
+                          if (!range) return null
+                          return (
+                            <div style={{ fontSize: 11, color: meta.color, fontWeight: 600, marginTop: 2, opacity: 0.85 }}>
+                              🎯 {range}
+                            </div>
+                          )
                         })()}
                         {adjusted && !isPast && !aiPlanActive && (
                           <div style={{ fontSize: 11, color: 'var(--c-text-3)', marginTop: 1 }}>↩ verschoben</div>
