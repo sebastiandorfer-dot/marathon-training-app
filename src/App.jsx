@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { supabase } from './supabase'
-import { generateTrainingPlan, getTotalPlanWeeks } from './utils/planUtils'
+import { generateTrainingPlan, getTotalPlanWeeks, getCurrentPlanPosition } from './utils/planUtils'
 import { deriveMaxHR, calculateVO2max, predictMarathonPaceFromVO2max } from './utils/fitnessUtils'
 import { shouldRegeneratePlan, generateAIPlan } from './utils/aiPlanService'
 
@@ -15,6 +15,7 @@ import PlanTab from './components/tabs/PlanTab'
 import CoachTab from './components/tabs/CoachTab'
 import ProfileTab from './components/tabs/ProfileTab'
 import FitnessTab from './components/tabs/FitnessTab'
+import StatsTab from './components/tabs/StatsTab'
 import { exchangeStravaCode, getValidToken, fetchAllStravaRuns, makeStravaLogRow, filterNewStravaRuns, classifyRunType } from './utils/stravaUtils'
 
 /**
@@ -431,6 +432,36 @@ Antworte mit JSON: {"text": "...", "emoji": "✅|⚠️|🔥|💪|😤"}`,
     }
   }, [completedWorkoutIds, user])
 
+  // ── Shift today's workout to tomorrow (or swap if tomorrow is occupied) ──────
+  const handleShiftWorkout = useCallback(async (workoutId) => {
+    if (!trainingPlan?.plan_data?.weeks || !profile?.marathon_date) return
+    const pos = getCurrentPlanPosition(profile.marathon_date)
+    if (pos.status !== 'active') return
+
+    const todayDow = pos.dayOfWeek                         // 0=Mon…6=Sun
+    const tomorrowDow = (todayDow + 1) % 7
+
+    const newWeeks = trainingPlan.plan_data.weeks.map(week => {
+      if (week.week !== pos.week) return week
+      const workouts = week.workouts ? [...week.workouts] : []
+      const todayIdx    = workouts.findIndex(w => w.id === workoutId)
+      const tomorrowIdx = workouts.findIndex(w => w.day_of_week === tomorrowDow)
+      if (todayIdx === -1) return week
+      const newWorkouts = workouts.map((w, i) => {
+        if (i === todayIdx)    return { ...w, day_of_week: tomorrowDow }
+        if (tomorrowIdx !== -1 && i === tomorrowIdx) return { ...w, day_of_week: todayDow }
+        return w
+      })
+      return { ...week, workouts: newWorkouts }
+    })
+
+    const newPlanData = { ...trainingPlan.plan_data, weeks: newWeeks }
+    const { data, error } = await supabase
+      .from('training_plans').update({ plan_data: newPlanData })
+      .eq('user_id', user.id).select().single()
+    if (!error && data) setTrainingPlan(data)
+  }, [trainingPlan, profile, user])
+
   // ── Add / update workout log ───────────────────────────────────
   // Upsert by ID so an RPE update doesn't duplicate. After each upsert,
   // check if the AI plan needs regeneration (significant changes only).
@@ -730,6 +761,7 @@ Antworte mit JSON: {"text": "...", "emoji": "✅|⚠️|🔥|💪|😤"}`,
               lastPlanChange={lastPlanChange}
               onPlanChangeDismiss={() => setLastPlanChange(null)}
               pendingStravaQueue={pendingStravaQueue}
+              onShiftWorkout={handleShiftWorkout}
               onStravaFeedback={async (rpe, notes, paceFeedback) => {
                 const current = pendingStravaQueue[0]
                 if (!current) return
@@ -793,6 +825,14 @@ Antworte mit JSON: {"text": "...", "emoji": "✅|⚠️|🔥|💪|😤"}`,
               onProfileUpdate={handleProfileUpdate}
               onRunsUpdate={handleRunsUpdate}
               workoutLogs={allWorkoutLogs}
+            />
+          )}
+          {activeTab === 'stats' && (
+            <StatsTab
+              user={user}
+              profile={profile}
+              workoutLogs={allWorkoutLogs}
+              stravaRuns={stravaRuns}
             />
           )}
           {activeTab === 'profile' && (

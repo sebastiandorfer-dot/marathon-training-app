@@ -30,11 +30,16 @@ const TABS = [
     ),
   },
   {
-    id: 'fitness',
-    label: 'Fitness',
+    id: 'stats',
+    label: 'Stats',
     icon: (active) => (
       <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={active ? 2.5 : 2} strokeLinecap="round" strokeLinejoin="round">
-        <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+        <circle cx="12" cy="12" r="10"/>
+        <circle cx="12" cy="12" r="3"/>
+        <line x1="12" y1="2" x2="12" y2="9"/>
+        <line x1="12" y1="15" x2="12" y2="22"/>
+        <line x1="2" y1="12" x2="9" y2="12"/>
+        <line x1="15" y1="12" x2="22" y2="12"/>
       </svg>
     ),
   },
@@ -52,7 +57,10 @@ const TABS = [
 
 export default function TabBar({ activeTab, onTabChange, trainingMode }) {
   // Tracking mode users don't have a plan — hide the Plan tab to avoid dead ends
-  const visibleTabs = TABS.filter(tab => !(tab.id === 'plan' && trainingMode === 'tracking'))
+  const visibleTabs = TABS.filter(tab => {
+    if (tab.id === 'plan' && trainingMode === 'tracking') return false
+    return true
+  })
 
   return (
     <nav className="tab-bar">

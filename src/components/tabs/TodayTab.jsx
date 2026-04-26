@@ -103,7 +103,7 @@ function useCoachIdentity(user) {
   return { coachName, firstName, avatarUrl }
 }
 
-export default function TodayTab({ user, profile, trainingPlan, completedWorkoutIds, onToggleComplete, workoutLogs, onLogAdded, onLogDeleted, stravaRuns = [], onConfirmRacePlan, aiPlan = null, aiPlanGenerating = false, lastPlanChange = null, onPlanChangeDismiss, pendingStravaQueue = [], onStravaFeedback }) {
+export default function TodayTab({ user, profile, trainingPlan, completedWorkoutIds, onToggleComplete, workoutLogs, onLogAdded, onLogDeleted, stravaRuns = [], onConfirmRacePlan, aiPlan = null, aiPlanGenerating = false, lastPlanChange = null, onPlanChangeDismiss, pendingStravaQueue = [], onStravaFeedback, onShiftWorkout }) {
   const maxHR = useMemo(() => deriveMaxHR(stravaRuns), [stravaRuns])
   // First item in the queue is the currently shown feedback card
   const pendingStravaFeedback = pendingStravaQueue[0] ?? null
@@ -499,6 +499,7 @@ export default function TodayTab({ user, profile, trainingPlan, completedWorkout
               isDone={completedWorkoutIds.includes(displayWorkout.id)}
               onToggle={() => onToggleComplete(displayWorkout.id)}
               onQuickLog={() => handleQuickLog(displayWorkout)}
+              onShift={onShiftWorkout ? () => onShiftWorkout(displayWorkout.id) : null}
             />
           )}
 
@@ -753,7 +754,7 @@ function AIContextCard({ aiPlan }) {
   )
 }
 
-function WorkoutHero({ workout, isToday, nextDate, nextWeek, isDone, onToggle, onQuickLog }) {
+function WorkoutHero({ workout, isToday, nextDate, nextWeek, isDone, onToggle, onQuickLog, onShift }) {
   const color = {
     easy: 'var(--c-easy)', tempo: 'var(--c-tempo)', interval: 'var(--c-interval)',
     long: 'var(--c-long)', recovery: 'var(--c-recovery)', cross: 'var(--c-cross)',
@@ -846,47 +847,66 @@ function WorkoutHero({ workout, isToday, nextDate, nextWeek, isDone, onToggle, o
       </div>
 
       {isToday && (
-        <div style={{ marginTop: 'var(--sp-5)', display: 'flex', gap: 8 }}>
-          {/* Quick-Log: create log entry + open RPE modal */}
-          {!isDone && onQuickLog && (
+        <div style={{ marginTop: 'var(--sp-5)', display: 'flex', flexDirection: 'column', gap: 8 }}>
+          {/* Primary actions: Quick-Log + Toggle */}
+          <div style={{ display: 'flex', gap: 8 }}>
+            {!isDone && onQuickLog && (
+              <button
+                onClick={onQuickLog}
+                style={{
+                  flex: 1, padding: 'var(--sp-3)',
+                  borderRadius: 'var(--r-md)',
+                  border: `1.5px solid ${color}`,
+                  background: color + '15',
+                  color,
+                  fontWeight: 700, fontSize: '0.9rem', cursor: 'pointer',
+                  transition: 'all 0.2s',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+                  fontFamily: 'var(--font)',
+                }}
+              >
+                ⚡ Direkt eintragen
+              </button>
+            )}
             <button
-              onClick={onQuickLog}
+              onClick={onToggle}
               style={{
                 flex: 1, padding: 'var(--sp-3)',
                 borderRadius: 'var(--r-md)',
-                border: `1.5px solid ${color}`,
-                background: color + '15',
-                color,
-                fontWeight: 700, fontSize: '0.9rem', cursor: 'pointer',
+                border: `1.5px solid ${isDone ? 'var(--c-primary)' : 'var(--c-border-light)'}`,
+                background: isDone ? 'var(--c-primary)' : 'transparent',
+                color: isDone ? '#fff' : 'var(--c-text-2)',
+                fontWeight: 600, fontSize: '0.9rem', cursor: 'pointer',
                 transition: 'all 0.2s',
                 display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
                 fontFamily: 'var(--font)',
               }}
             >
-              ⚡ Direkt eintragen
+              {isDone ? (
+                <><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round"><polyline points="20 6 9 17 4 12"/></svg> Erledigt</>
+              ) : (
+                <><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><polyline points="20 6 9 17 4 12"/></svg> Abhaken</>
+              )}
+            </button>
+          </div>
+          {/* Shift to tomorrow — only when not done */}
+          {!isDone && onShift && (
+            <button
+              onClick={onShift}
+              style={{
+                width: '100%', padding: '9px 0',
+                borderRadius: 'var(--r-md)',
+                border: '1px solid var(--c-border)',
+                background: 'transparent',
+                color: 'var(--c-text-3)',
+                fontWeight: 500, fontSize: '0.8125rem', cursor: 'pointer',
+                display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+                fontFamily: 'var(--font)',
+              }}
+            >
+              📅 Auf morgen verschieben
             </button>
           )}
-          {/* Toggle done / undo */}
-          <button
-            onClick={onToggle}
-            style={{
-              flex: 1, padding: 'var(--sp-3)',
-              borderRadius: 'var(--r-md)',
-              border: `1.5px solid ${isDone ? 'var(--c-primary)' : 'var(--c-border-light)'}`,
-              background: isDone ? 'var(--c-primary)' : 'transparent',
-              color: isDone ? '#fff' : 'var(--c-text-2)',
-              fontWeight: 600, fontSize: '0.9rem', cursor: 'pointer',
-              transition: 'all 0.2s',
-              display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
-              fontFamily: 'var(--font)',
-            }}
-          >
-            {isDone ? (
-              <><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round"><polyline points="20 6 9 17 4 12"/></svg> Erledigt</>
-            ) : (
-              <><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><polyline points="20 6 9 17 4 12"/></svg> Abhaken</>
-            )}
-          </button>
         </div>
       )}
     </div>
