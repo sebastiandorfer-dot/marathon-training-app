@@ -354,6 +354,11 @@ Antworte mit JSON: {"text": "...", "emoji": "✅|⚠️|🔥|💪|😤"}`,
         if (planError) throw planError
         setTrainingPlan(savedPlan)
 
+        // Save initial goal if user set one during onboarding
+        if (formData.initial_goal) {
+          await supabase.from('goals').insert({ ...formData.initial_goal, user_id: user.id })
+        }
+
         setView('app')
       } catch (err) {
         console.error('Error generating plan:', err)
@@ -376,6 +381,12 @@ Antworte mit JSON: {"text": "...", "emoji": "✅|⚠️|🔥|💪|😤"}`,
           .single()
         if (profileError) throw profileError
         setProfile(savedProfile)
+
+        // Save initial goal if user set one during onboarding
+        if (formData.initial_goal) {
+          await supabase.from('goals').insert({ ...formData.initial_goal, user_id: user.id })
+        }
+
         setView('app')
       } catch (err) {
         console.error('Error saving profile:', err)

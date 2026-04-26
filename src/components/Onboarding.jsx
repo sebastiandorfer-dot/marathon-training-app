@@ -15,10 +15,17 @@ const DAYS = ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So']
 
 // Steps per training mode
 const MODE_STEPS = {
-  race:     ['mode', 'level', 'pace', 'schedule',         'context'],
-  fitness:  ['mode', 'level', 'pace', 'schedule-fitness', 'context'],
-  tracking: ['mode', 'context'],
+  race:     ['mode', 'level', 'pace', 'schedule',         'goal', 'context'],
+  fitness:  ['mode', 'level', 'pace', 'schedule-fitness', 'goal', 'context'],
+  tracking: ['mode', 'goal', 'context'],
 }
+
+const RACE_DISTANCES_GOAL = [
+  { id: '5km',           label: '5 km',        km: 5 },
+  { id: '10km',          label: '10 km',        km: 10 },
+  { id: 'half_marathon', label: 'Halbmarathon', km: 21.0975 },
+  { id: 'marathon',      label: 'Marathon',     km: 42.195 },
+]
 
 function getSteps(mode) {
   return MODE_STEPS[mode] || ['mode']
@@ -44,6 +51,13 @@ export default function Onboarding({ user, onComplete }) {
     currentWeeklyKm: null,
     longestRecentRunKm: null,
     trainingGoal: '',
+    // Goal step
+    goalType: null,            // 'race' | 'distance' | 'time' | 'skip'
+    goalRaceDistance: '10km',
+    goalRaceDate: '',
+    goalTargetTimeInput: '',   // user-typed "mm:ss" or "h:mm:ss"
+    goalTargetDistanceKm: 20,
+    goalTimeDistanceKm: 5,     // for 'time' goals: over which distance
   })
   const [error, setError] = useState('')
 
@@ -164,6 +178,41 @@ export default function Onboarding({ user, onComplete }) {
     if (data.longestRecentRunKm !== null) payload.longest_recent_run_km  = data.longestRecentRunKm
     if (data.trainingGoal)               payload.training_goal           = data.trainingGoal
 
+    // Goal step — build goal payload if user chose one
+    if (data.goalType && data.goalType !== 'skip') {
+      const raceKm = RACE_DISTANCES_GOAL.find(d => d.id === data.goalRaceDistance)?.km || 10
+      let targetTimeSec = null
+      if (data.goalTargetTimeInput.trim()) {
+        const parts = data.goalTargetTimeInput.split(':')
+        if (parts.length === 3) targetTimeSec = parseInt(parts[0]) * 3600 + parseInt(parts[1]) * 60 + parseInt(parts[2])
+        else if (parts.length === 2) targetTimeSec = parseInt(parts[0]) * 60 + parseInt(parts[1])
+      }
+
+      if (data.goalType === 'race') {
+        payload.initial_goal = {
+          type: 'race',
+          title: `${RACE_DISTANCES_GOAL.find(d => d.id === data.goalRaceDistance)?.label || '10 km'} Rennen`,
+          race_distance: data.goalRaceDistance,
+          race_distance_km: raceKm,
+          race_date: data.goalRaceDate || null,
+          target_time_sec: targetTimeSec,
+        }
+      } else if (data.goalType === 'distance') {
+        payload.initial_goal = {
+          type: 'distance',
+          title: `${data.goalTargetDistanceKm} km laufen`,
+          target_distance_km: parseFloat(data.goalTargetDistanceKm),
+        }
+      } else if (data.goalType === 'time') {
+        payload.initial_goal = {
+          type: 'time',
+          title: `${data.goalTimeDistanceKm} km in ${data.goalTargetTimeInput || '—'}`,
+          race_distance_km: parseFloat(data.goalTimeDistanceKm),
+          target_time_sec: targetTimeSec,
+        }
+      }
+    }
+
     onComplete(payload)
   }
 
@@ -250,6 +299,23 @@ export default function Onboarding({ user, onComplete }) {
             onToggleBlocked={toggleBlockedDay}
             weeklyKm={data.targetWeeklyKm}
             onWeeklyKm={v => update('targetWeeklyKm', v)}
+          />
+        )}
+        {currentStepId === 'goal' && (
+          <StepGoal
+            goalType={data.goalType}
+            onGoalType={v => update('goalType', v)}
+            raceDistance={data.goalRaceDistance}
+            onRaceDistance={v => update('goalRaceDistance', v)}
+            raceDate={data.goalRaceDate}
+            onRaceDate={v => update('goalRaceDate', v)}
+            targetTimeInput={data.goalTargetTimeInput}
+            onTargetTimeInput={v => update('goalTargetTimeInput', v)}
+            targetDistanceKm={data.goalTargetDistanceKm}
+            onTargetDistanceKm={v => update('goalTargetDistanceKm', v)}
+            timeDistanceKm={data.goalTimeDistanceKm}
+            onTimeDistanceKm={v => update('goalTimeDistanceKm', v)}
+            trainingMode={data.trainingMode}
           />
         )}
         {currentStepId === 'context' && (
@@ -876,6 +942,137 @@ function StepContext({
         <p style={{ fontSize: '0.75rem', color: 'var(--c-text-3)', marginTop: 16 }}>
           Je mehr du beantwortest, desto genauer wird dein erster Plan — du kannst aber auch direkt auf „Weiter" tippen.
         </p>
+      )}
+    </div>
+  )
+}
+
+// ── Step: Goal Setting ────────────────────────────────────────
+function StepGoal({ goalType, onGoalType, raceDistance, onRaceDistance, raceDate, onRaceDate, targetTimeInput, onTargetTimeInput, targetDistanceKm, onTargetDistanceKm, timeDistanceKm, onTimeDistanceKm, trainingMode }) {
+  const goalOptions = [
+    { id: 'race',     icon: '🏁', title: 'Rennen',   desc: 'Ich will ein Rennen laufen — 5km, 10km oder Halbmarathon' },
+    { id: 'distance', icon: '📏', title: 'Distanz',  desc: 'Ich will eine bestimmte Distanz schaffen — z.B. 20km' },
+    { id: 'time',     icon: '⚡', title: 'Zielzeit', desc: 'Ich will eine Strecke in einer bestimmten Zeit laufen' },
+    { id: 'skip',     icon: '🔄', title: 'Erstmal erkunden', desc: 'Kein spezifisches Ziel — ich füge später eines hinzu' },
+  ]
+
+  const distancePresets = [10, 15, 20, 25, 30]
+
+  return (
+    <div className="fade-up">
+      <h2 style={{ marginBottom: 'var(--sp-2)' }}>Was ist dein Laufziel? 🎯</h2>
+      <p style={{ marginBottom: 'var(--sp-6)', color: 'var(--c-text-2)' }}>
+        Der Coach passt deine Empfehlungen darauf an. Du kannst später weitere Ziele setzen.
+      </p>
+
+      {/* Type selection */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-2)', marginBottom: 'var(--sp-4)' }}>
+        {goalOptions.map(opt => (
+          <div key={opt.id} onClick={() => onGoalType(opt.id)}
+            style={{
+              background: goalType === opt.id ? 'var(--c-primary-dim)' : 'var(--c-card)',
+              border: `2px solid ${goalType === opt.id ? 'var(--c-primary)' : 'var(--c-border)'}`,
+              borderRadius: 14, padding: '14px 16px',
+              display: 'flex', alignItems: 'center', gap: 12,
+              cursor: 'pointer', transition: 'all 0.15s',
+            }}>
+            <span style={{ fontSize: 26, flexShrink: 0 }}>{opt.icon}</span>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontWeight: 700, fontSize: 14, color: goalType === opt.id ? 'var(--c-primary)' : 'var(--c-text)' }}>
+                {opt.title}
+              </div>
+              <div style={{ fontSize: 12, color: 'var(--c-text-3)', marginTop: 2 }}>{opt.desc}</div>
+            </div>
+            {goalType === opt.id && (
+              <span style={{ color: 'var(--c-primary)', fontSize: 18, flexShrink: 0 }}>✓</span>
+            )}
+          </div>
+        ))}
+      </div>
+
+      {/* Detail fields — appear after type selection */}
+      {goalType === 'race' && (
+        <div style={{ animation: 'fadeUp 0.25s ease both', background: 'var(--c-card)', border: '1px solid var(--c-border)', borderRadius: 14, padding: 16, display: 'flex', flexDirection: 'column', gap: 14 }}>
+          <div className="form-group" style={{ marginBottom: 0 }}>
+            <label className="form-label">Renndistanz</label>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 6 }}>
+              {RACE_DISTANCES_GOAL.map(d => (
+                <button key={d.id} onClick={() => onRaceDistance(d.id)}
+                  style={{
+                    padding: '7px 14px', borderRadius: 20, fontSize: 13,
+                    border: `1.5px solid ${raceDistance === d.id ? 'var(--c-primary)' : 'var(--c-border)'}`,
+                    background: raceDistance === d.id ? 'var(--c-primary-dim)' : 'var(--c-bg)',
+                    color: raceDistance === d.id ? 'var(--c-primary)' : 'var(--c-text-2)',
+                    fontWeight: raceDistance === d.id ? 700 : 400,
+                    cursor: 'pointer', fontFamily: 'var(--font)',
+                  }}>
+                  {d.label}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="form-group" style={{ marginBottom: 0 }}>
+            <label className="form-label">Renndatum (optional)</label>
+            <input type="date" className="form-input" value={raceDate} onChange={e => onRaceDate(e.target.value)} />
+          </div>
+          <div className="form-group" style={{ marginBottom: 0 }}>
+            <label className="form-label">Zielzeit (optional) — z.B. 1:45:00</label>
+            <input type="text" className="form-input" placeholder="h:mm:ss oder mm:ss"
+              value={targetTimeInput} onChange={e => onTargetTimeInput(e.target.value)} />
+          </div>
+        </div>
+      )}
+
+      {goalType === 'distance' && (
+        <div style={{ animation: 'fadeUp 0.25s ease both', background: 'var(--c-card)', border: '1px solid var(--c-border)', borderRadius: 14, padding: 16 }}>
+          <label className="form-label" style={{ marginBottom: 10, display: 'block' }}>Zieldistanz</label>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 10 }}>
+            {distancePresets.map(km => (
+              <button key={km} onClick={() => onTargetDistanceKm(km)}
+                style={{
+                  padding: '7px 14px', borderRadius: 20, fontSize: 13,
+                  border: `1.5px solid ${targetDistanceKm === km ? 'var(--c-primary)' : 'var(--c-border)'}`,
+                  background: targetDistanceKm === km ? 'var(--c-primary-dim)' : 'var(--c-bg)',
+                  color: targetDistanceKm === km ? 'var(--c-primary)' : 'var(--c-text-2)',
+                  fontWeight: targetDistanceKm === km ? 700 : 400,
+                  cursor: 'pointer', fontFamily: 'var(--font)',
+                }}>
+                {km} km
+              </button>
+            ))}
+          </div>
+          <input type="number" className="form-input" placeholder="Andere Distanz (km)" min={1} step={1}
+            value={distancePresets.includes(Number(targetDistanceKm)) ? '' : targetDistanceKm}
+            onChange={e => onTargetDistanceKm(e.target.value)} />
+        </div>
+      )}
+
+      {goalType === 'time' && (
+        <div style={{ animation: 'fadeUp 0.25s ease both', background: 'var(--c-card)', border: '1px solid var(--c-border)', borderRadius: 14, padding: 16, display: 'flex', flexDirection: 'column', gap: 14 }}>
+          <div className="form-group" style={{ marginBottom: 0 }}>
+            <label className="form-label">Über welche Distanz?</label>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 6 }}>
+              {[5, 10, 21.0975].map(km => (
+                <button key={km} onClick={() => onTimeDistanceKm(km)}
+                  style={{
+                    padding: '7px 14px', borderRadius: 20, fontSize: 13,
+                    border: `1.5px solid ${timeDistanceKm === km ? 'var(--c-primary)' : 'var(--c-border)'}`,
+                    background: timeDistanceKm === km ? 'var(--c-primary-dim)' : 'var(--c-bg)',
+                    color: timeDistanceKm === km ? 'var(--c-primary)' : 'var(--c-text-2)',
+                    fontWeight: timeDistanceKm === km ? 700 : 400,
+                    cursor: 'pointer', fontFamily: 'var(--font)',
+                  }}>
+                  {km === 21.0975 ? 'Halbmarathon' : `${km} km`}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="form-group" style={{ marginBottom: 0 }}>
+            <label className="form-label">Zielzeit — z.B. 20:00 für Sub-20 über 5 km</label>
+            <input type="text" className="form-input" placeholder="mm:ss oder h:mm:ss"
+              value={targetTimeInput} onChange={e => onTargetTimeInput(e.target.value)} />
+          </div>
+        </div>
       )}
     </div>
   )
