@@ -1,5 +1,6 @@
 import { useState, useMemo, useEffect, useRef } from 'react'
 import { supabase } from '../../supabase'
+import { getPaceTargetRange } from '../../utils/stravaUtils'
 import {
   getCurrentPlanPosition,
   getTodayWorkout,
@@ -146,7 +147,9 @@ export default function TodayTab({ user, profile, trainingPlan, completedWorkout
   const [logging, setLogging] = useState(false)
   const [logError, setLogError] = useState('')
   const [rpeLogId, setRpeLogId] = useState(null)
+  const [rpeWorkoutType, setRpeWorkoutType] = useState(null)
   const [rpeSaving, setRpeSaving] = useState(false)
+  const [showPaceFeedback, setShowPaceFeedback] = useState(false)
 
   const displayWorkout = todayWorkout || nextWorkout?.workout
 
@@ -161,7 +164,28 @@ export default function TodayTab({ user, profile, trainingPlan, completedWorkout
       if (data) onLogAdded(data)
     } finally {
       setRpeSaving(false)
+      // For tempo/interval: proceed to pace feedback step
+      if (rpeWorkoutType === 'tempo' || rpeWorkoutType === 'interval') {
+        setShowPaceFeedback(true)
+      } else {
+        setRpeLogId(null)
+        setRpeWorkoutType(null)
+      }
+    }
+  }
+
+  async function savePaceFeedback(value) {
+    setRpeSaving(true)
+    try {
+      const { data } = await supabase
+        .from('workout_logs').update({ pace_feedback: value })
+        .eq('id', rpeLogId).select().single()
+      if (data) onLogAdded(data)
+    } finally {
+      setRpeSaving(false)
       setRpeLogId(null)
+      setRpeWorkoutType(null)
+      setShowPaceFeedback(false)
     }
   }
 
@@ -189,7 +213,11 @@ export default function TodayTab({ user, profile, trainingPlan, completedWorkout
       onLogAdded(data)
       setLogOpen(false)
       setLogForm({ workout_date: todayStr(), workout_type: 'easy', distance_km: '', duration_min: '', notes: '', rpe: null })
-      if (!logForm.rpe) setRpeLogId(data.id)
+      if (!logForm.rpe) {
+        setRpeLogId(data.id)
+        setRpeWorkoutType(logForm.workout_type)
+        setShowPaceFeedback(false)
+      }
     } catch (err) {
       setLogError(err.message || 'Fehler beim Speichern.')
     } finally {
@@ -510,13 +538,60 @@ export default function TodayTab({ user, profile, trainingPlan, completedWorkout
         </div>
       </div>
 
-      {/* RPE Post-Log Modal */}
+      {/* RPE + Pace Feedback Post-Log Modal */}
       {rpeLogId && (
         <>
-          <div onClick={() => setRpeLogId(null)} style={{
+          <div onClick={() => { setRpeLogId(null); setRpeWorkoutType(null); setShowPaceFeedback(false) }} style={{
             position: 'fixed', inset: 0, zIndex: 199, background: 'rgba(0,0,0,0.45)',
           }} />
-          <RpeModalSheet onSave={saveRpe} onSkip={() => setRpeLogId(null)} disabled={rpeSaving} />
+          <div style={{
+            position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: 200,
+            background: 'var(--c-bg)', borderTop: '1.5px solid var(--c-border)',
+            borderRadius: '20px 20px 0 0', padding: '20px 20px 44px',
+            display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 16,
+            boxShadow: '0 -8px 32px rgba(0,0,0,0.15)',
+          }}>
+            <div style={{ width: 36, height: 4, borderRadius: 2, background: 'var(--c-border)', marginBottom: 4 }} />
+
+            {!showPaceFeedback ? (
+              /* ── Step 1: RPE slider ── */
+              <RpeModalSheet onSave={saveRpe} onSkip={() => { setRpeLogId(null); setRpeWorkoutType(null) }} disabled={rpeSaving} />
+            ) : (
+              /* ── Step 2: Pace Feedback (tempo/interval only) ── */
+              <>
+                <div style={{ fontWeight: 700, fontSize: 18, color: 'var(--c-text)' }}>Wie war die Pace? ⚡</div>
+                <p style={{ fontSize: 13, color: 'var(--c-text-3)', margin: '-8px 0 0', textAlign: 'center' }}>
+                  {getPaceTargetRange(profile, rpeWorkoutType)
+                    ? `Zielpace war ${getPaceTargetRange(profile, rpeWorkoutType)}`
+                    : 'War die vorgegebene Pace passend?'}
+                </p>
+                <div style={{ display: 'flex', gap: 10, width: '100%' }}>
+                  {[
+                    { value: 'too_hard', emoji: '🔥', label: 'Zu hart',    color: '#ef4444' },
+                    { value: 'perfect',  emoji: '✓',  label: 'Perfekt',    color: '#22c55e' },
+                    { value: 'too_easy', emoji: '💨', label: 'Zu leicht',  color: '#4a9eff' },
+                  ].map(opt => (
+                    <button key={opt.value} onClick={() => savePaceFeedback(opt.value)} disabled={rpeSaving}
+                      style={{
+                        flex: 1, padding: '16px 6px', borderRadius: 14,
+                        border: `2px solid ${opt.color}44`,
+                        background: `${opt.color}11`,
+                        cursor: 'pointer', fontFamily: 'var(--font)',
+                        display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6,
+                        transition: 'all 0.15s', opacity: rpeSaving ? 0.6 : 1,
+                      }}>
+                      <span style={{ fontSize: 26 }}>{opt.emoji}</span>
+                      <span style={{ fontSize: 12, fontWeight: 700, color: opt.color }}>{opt.label}</span>
+                    </button>
+                  ))}
+                </div>
+                <button onClick={() => { setRpeLogId(null); setRpeWorkoutType(null); setShowPaceFeedback(false) }}
+                  style={{ background: 'none', border: 'none', color: 'var(--c-text-3)', fontSize: 14, cursor: 'pointer', fontFamily: 'var(--font)', padding: '4px 12px' }}>
+                  Überspringen
+                </button>
+              </>
+            )}
+          </div>
         </>
       )}
     </div>
