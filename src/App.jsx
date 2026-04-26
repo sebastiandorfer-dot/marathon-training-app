@@ -573,7 +573,7 @@ export default function App() {
     const maxHR           = deriveMaxHR(stravaRuns)
     const vo2max          = calculateVO2max(stravaRuns, maxHR)
     const predictedPaceSec = predictMarathonPaceFromVO2max(vo2max)
-    generateTrainingPlan(profile, { overridePaceSec: predictedPaceSec || null })
+    generateTrainingPlan(profile, { overridePaceSec: predictedPaceSec || null }, supabase)
       .then(planData => supabase.from('training_plans')
         .upsert({ user_id: user.id, plan_data: planData }, { onConflict: 'user_id' })
         .select().single())

@@ -914,7 +914,7 @@ function TrackingObserverCard({ workoutLogs, profile }) {
 
     supabase.functions.invoke('ai-proxy', {
       body: {
-        model: 'claude-haiku-4-5-20251001',
+        model: 'claude-haiku-4-5',
         max_tokens: 200,
         messages: [{
           role: 'user',

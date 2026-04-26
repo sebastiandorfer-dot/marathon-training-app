@@ -337,7 +337,7 @@ Output ONLY the raw JSON. Start with { end with }.`
 
   const { data: proxyData, error: proxyError } = await supabaseClient.functions.invoke('ai-proxy', {
     body: {
-      model: 'claude-sonnet-4-5',
+      model: 'claude-sonnet-4-6',
       max_tokens: 16000,
       messages: [{ role: 'user', content: prompt }],
     },
