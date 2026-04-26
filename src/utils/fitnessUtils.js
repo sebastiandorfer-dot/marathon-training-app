@@ -325,3 +325,17 @@ export function weeklyMileageStats(runs) {
     weeklyBreakdown,
   }
 }
+
+/**
+ * Get Garmin 5-zone HR zone from average HR and max HR.
+ * Returns null if data is missing.
+ */
+export function getHRZone(avgHR, maxHR) {
+  if (!avgHR || !maxHR) return null
+  const pct = avgHR / maxHR
+  if (pct < 0.60) return { zone: 1, label: 'Z1', name: 'Erholung',   color: '#94a3b8' }
+  if (pct < 0.70) return { zone: 2, label: 'Z2', name: 'Basis',      color: '#22c55e' }
+  if (pct < 0.80) return { zone: 3, label: 'Z3', name: 'Aerob',      color: '#f59e0b' }
+  if (pct < 0.90) return { zone: 4, label: 'Z4', name: 'Threshold',  color: '#f97316' }
+  return              { zone: 5, label: 'Z5', name: 'VO2max',     color: '#ef4444' }
+}

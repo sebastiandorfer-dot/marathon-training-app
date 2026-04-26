@@ -83,6 +83,72 @@ export default function App() {
       .sort((a, b) => new Date(b.workout_date) - new Date(a.workout_date))
   }, [workoutLogs, stravaRuns, profile])
 
+  // ── Generate weekly KI feedback (Sunday ≥22:00) ───────────────
+  const weeklyFeedbackRef = useRef(false)
+
+  const generateWeeklyFeedback = useCallback(async (currentProfile, logs, runs) => {
+    const now = new Date()
+    const isSunday = now.getDay() === 0
+    const isEvening = now.getHours() >= 22
+    if (!isSunday || !isEvening) return
+
+    // Compute Monday of current week
+    const monday = new Date(now)
+    monday.setDate(now.getDate() - 6)
+    monday.setHours(0, 0, 0, 0)
+    const weekStart = monday.toISOString().split('T')[0]
+
+    // Skip if already generated for this week
+    if (currentProfile.weekly_feedback?.weekStart === weekStart) return
+    if (weeklyFeedbackRef.current) return
+    weeklyFeedbackRef.current = true
+
+    const sunday = new Date(monday); sunday.setDate(monday.getDate() + 6)
+    const weekLogs = logs.filter(l => l.workout_date >= weekStart && l.workout_date <= sunday.toISOString().split('T')[0])
+    if (weekLogs.length === 0) { weeklyFeedbackRef.current = false; return }
+
+    const totalKm = weekLogs.reduce((s, l) => s + (l.distance_km || 0), 0).toFixed(1)
+    const avgRpe = weekLogs.filter(l => l.rpe).length > 0
+      ? (weekLogs.filter(l => l.rpe).reduce((s, l) => s + l.rpe, 0) / weekLogs.filter(l => l.rpe).length).toFixed(1)
+      : null
+    const planned = currentProfile.sessions_per_week || 3
+    const logsText = weekLogs.map(l =>
+      `${l.workout_date}: ${l.workout_type}${l.distance_km ? ` ${l.distance_km}km` : ''}${l.duration_min ? ` ${l.duration_min}min` : ''}${l.rpe ? ` RPE ${l.rpe}/10` : ''}`
+    ).join('\n')
+
+    try {
+      const { data } = await supabase.functions.invoke('ai-proxy', {
+        body: {
+          model: 'claude-haiku-4-5',
+          max_tokens: 250,
+          messages: [{
+            role: 'user',
+            content: `Du bist ein Marathontrainer. Gib ein kurzes, ehrliches Wochenfeedback auf Deutsch (2-3 Sätze, direkt, kein Smalltalk).
+
+Woche ${weekStart}:
+${logsText}
+
+Gesamt: ${totalKm}km, ${weekLogs.length}/${planned} geplante Einheiten${avgRpe ? `, Ø RPE ${avgRpe}/10` : ''}.
+Level: ${currentProfile.level || 'unbekannt'}
+
+Antworte mit JSON: {"text": "...", "emoji": "✅|⚠️|🔥|💪|😤"}`,
+          }],
+        },
+      })
+      const raw = data?.content?.[0]?.text || ''
+      const match = raw.match(/\{[\s\S]*\}/)
+      if (!match) return
+      const parsed = JSON.parse(match[0])
+      const feedback = { ...parsed, weekStart, generatedAt: now.toISOString() }
+      await supabase.from('profiles').update({ weekly_feedback: feedback }).eq('id', currentProfile.id)
+      setProfile(p => p ? { ...p, weekly_feedback: feedback } : p)
+    } catch (err) {
+      console.warn('Weekly feedback generation failed:', err)
+    } finally {
+      weeklyFeedbackRef.current = false
+    }
+  }, [])
+
   // ── Persist AI plan to profiles.ai_plan ───────────────────────
   const saveAiPlan = useCallback(async (plan, userId) => {
     try {
@@ -242,6 +308,9 @@ export default function App() {
       }
 
       setView('app')
+
+      // Trigger weekly feedback if it's Sunday ≥22:00
+      generateWeeklyFeedback(activeProfile, mergedLogs, runsRes.data || [])
     } catch (err) {
       console.error('Failed to load user data:', err)
       setView('auth')
@@ -560,7 +629,10 @@ export default function App() {
       performStravaSync(profile)
     }
     const onVisible = () => {
-      if (document.visibilityState === 'visible') performStravaSync(profile)
+      if (document.visibilityState === 'visible') {
+        performStravaSync(profile)
+        generateWeeklyFeedback(profile, workoutLogsRef.current, stravaRuns)
+      }
     }
     document.addEventListener('visibilitychange', onVisible)
     return () => document.removeEventListener('visibilitychange', onVisible)

@@ -314,6 +314,7 @@ Return ONLY a valid JSON object (no markdown, no code fences):
           "distance_km": 8,
           "duration_min": 55,
           "description": "Zone 2 easy pace. RPE 4-5/10. Conversational effort.",
+          "structured_description": "10min Einlaufen | 35min Easy Pace 6:30-7:00/km | 10min Auslaufen",
           "pace_target": "6:30-7:00 min/km"
         }
       ]
@@ -332,6 +333,7 @@ RULES:
 8. One long run per week (day ${planDays[planDays.length - 1]}). Tempo/intervals from week 3+
 9. Week ${generatedWeeks} = race week with marathon on marathon day
 10. Keep descriptions concise (1 sentence with RPE/pace)
+11. Every non-rest workout MUST include "structured_description": a concise workout structure using " | " as separator. Format: "Xmin Einlaufen | [main set with reps/pace] | Xmin Auslaufen". For intervals: "10min Einlaufen | 5×1km @ 4:45/km (90s Pause) | 10min Auslaufen". For easy/long: "10min Einlaufen | Xkm @ Pace | 10min Auslaufen".
 
 Output ONLY the raw JSON. Start with { end with }.`
 

@@ -1,6 +1,7 @@
 import { useState, useMemo, useEffect, useRef } from 'react'
 import { supabase } from '../../supabase'
 import { getPaceTargetRange } from '../../utils/stravaUtils'
+import { deriveMaxHR, getHRZone } from '../../utils/fitnessUtils'
 import {
   getCurrentPlanPosition,
   getTodayWorkout,
@@ -103,6 +104,7 @@ function useCoachIdentity(user) {
 }
 
 export default function TodayTab({ user, profile, trainingPlan, completedWorkoutIds, onToggleComplete, workoutLogs, onLogAdded, onLogDeleted, stravaRuns = [], onConfirmRacePlan, aiPlan = null, aiPlanGenerating = false, lastPlanChange = null, onPlanChangeDismiss, pendingStravaQueue = [], onStravaFeedback }) {
+  const maxHR = useMemo(() => deriveMaxHR(stravaRuns), [stravaRuns])
   // First item in the queue is the currently shown feedback card
   const pendingStravaFeedback = pendingStravaQueue[0] ?? null
   const trainingMode = profile.training_mode || 'race'
@@ -152,6 +154,33 @@ export default function TodayTab({ user, profile, trainingPlan, completedWorkout
   const [showPaceFeedback, setShowPaceFeedback] = useState(false)
 
   const displayWorkout = todayWorkout || nextWorkout?.workout
+
+  // Quick-log: mark done + create log from plan data + open RPE modal
+  async function handleQuickLog(workout) {
+    if (!workout || !todayWorkout) return
+    // Only quick-log today's workout
+    onToggleComplete(workout.id)
+    try {
+      const { data, error } = await supabase.from('workout_logs').insert({
+        user_id: user.id,
+        workout_date: todayStr(),
+        workout_type: workout.type,
+        distance_km: workout.distance_km || null,
+        duration_min: workout.duration_min || null,
+        notes: null,
+        rpe: null,
+        plan_workout_id: workout.id,
+      }).select().single()
+      if (!error && data) {
+        onLogAdded(data)
+        setRpeLogId(data.id)
+        setRpeWorkoutType(workout.type)
+        setShowPaceFeedback(false)
+      }
+    } catch (err) {
+      console.warn('Quick log failed:', err)
+    }
+  }
 
   function updateLog(key, val) { setLogForm(f => ({ ...f, [key]: val })) }
 
@@ -469,6 +498,7 @@ export default function TodayTab({ user, profile, trainingPlan, completedWorkout
               nextWeek={!todayWorkout && nextWorkout?.week}
               isDone={completedWorkoutIds.includes(displayWorkout.id)}
               onToggle={() => onToggleComplete(displayWorkout.id)}
+              onQuickLog={() => handleQuickLog(displayWorkout)}
             />
           )}
 
@@ -480,7 +510,8 @@ export default function TodayTab({ user, profile, trainingPlan, completedWorkout
                 {recentLogs.map(log => {
                   const color = TYPE_COLORS[log.workout_type] || 'var(--c-text-2)'
                   const icon = TYPE_ICONS[log.workout_type] || '📝'
-                  const rpeEmoji = log.rpe ? ['', '😌', '💪', '🔥'][log.rpe] : null
+                  const rpeEmoji = log.rpe ? (log.rpe <= 4 ? '😌' : log.rpe <= 7 ? '💪' : '🔥') : null
+                  const hrZone = maxHR && log.average_heartrate ? getHRZone(log.average_heartrate, maxHR) : null
                   return (
                     <div key={log.id} className="card card-sm" style={{ display: 'flex', gap: 'var(--sp-3)', alignItems: 'center' }}>
                       <div style={{
@@ -492,9 +523,20 @@ export default function TodayTab({ user, profile, trainingPlan, completedWorkout
                         {icon}
                       </div>
                       <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ fontWeight: 600, fontSize: '0.9rem', color: 'var(--c-text)', display: 'flex', alignItems: 'center', gap: 6 }}>
+                        <div style={{ fontWeight: 600, fontSize: '0.9rem', color: 'var(--c-text)', display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
                           {WORKOUT_TYPES.find(t => t.value === log.workout_type)?.label.replace(/^.\s/, '') || log.workout_type}
                           {rpeEmoji && <span style={{ fontSize: 14 }}>{rpeEmoji}</span>}
+                          {hrZone && (
+                            <span style={{
+                              fontSize: 10, fontWeight: 700,
+                              color: hrZone.color,
+                              background: hrZone.color + '18',
+                              border: `1px solid ${hrZone.color}44`,
+                              borderRadius: 4, padding: '1px 5px', lineHeight: 1.6,
+                            }}>
+                              {hrZone.label} {hrZone.name}
+                            </span>
+                          )}
                         </div>
                         <div style={{ fontSize: '0.8125rem', color: 'var(--c-text-2)' }}>
                           {log.distance_km ? `${log.distance_km} km` : ''}
@@ -534,6 +576,9 @@ export default function TodayTab({ user, profile, trainingPlan, completedWorkout
 
           {/* Weekly Summary — always visible */}
           <WeeklySummaryCard workoutLogs={workoutLogs} profile={profile} aiPlan={aiPlan} />
+
+          {/* Weekly AI Feedback — Sunday evening KI-generated summary */}
+          <WeeklyFeedbackCard weeklyFeedback={profile?.weekly_feedback} />
 
         </div>
       </div>
@@ -708,11 +753,26 @@ function AIContextCard({ aiPlan }) {
   )
 }
 
-function WorkoutHero({ workout, isToday, nextDate, nextWeek, isDone, onToggle }) {
+function WorkoutHero({ workout, isToday, nextDate, nextWeek, isDone, onToggle, onQuickLog }) {
   const color = {
     easy: 'var(--c-easy)', tempo: 'var(--c-tempo)', interval: 'var(--c-interval)',
     long: 'var(--c-long)', recovery: 'var(--c-recovery)', cross: 'var(--c-cross)',
   }[workout.type] || 'var(--c-primary)'
+
+  // Parse structured_description into warmup / main / cooldown steps
+  const steps = workout.structured_description
+    ? workout.structured_description.split(' | ').map(s => s.trim()).filter(Boolean)
+    : null
+
+  const stepLabel = (i, total) => {
+    if (i === 0) return 'Warm'
+    if (i === total - 1) return 'Cool'
+    return 'Main'
+  }
+  const stepColors = (i, total) => {
+    if (i === 0 || i === total - 1) return { bg: 'var(--c-bg)', border: 'var(--c-border)', text: 'var(--c-text-3)' }
+    return { bg: color + '15', border: color + '40', text: color }
+  }
 
   return (
     <div className="workout-hero" style={{ borderColor: isToday ? color : 'var(--c-border)' }}>
@@ -730,14 +790,39 @@ function WorkoutHero({ workout, isToday, nextDate, nextWeek, isDone, onToggle })
             </span>
             {nextWeek && <span style={{ fontSize: '0.75rem', color: 'var(--c-text-3)' }}>Woche {nextWeek}</span>}
           </div>
-          <h2 style={{ fontSize: '1.25rem', marginBottom: 'var(--sp-3)', color: 'var(--c-text)' }}>{workout.title}</h2>
+          <h2 style={{ fontSize: '1.25rem', marginBottom: 'var(--sp-2)', color: 'var(--c-text)' }}>{workout.title}</h2>
           {workout.description && (
-            <p style={{ fontSize: '0.875rem', color: 'var(--c-text-2)', lineHeight: 1.55, marginBottom: 'var(--sp-4)' }}>
+            <p style={{ fontSize: '0.875rem', color: 'var(--c-text-2)', lineHeight: 1.55, marginBottom: steps ? 'var(--sp-3)' : 'var(--sp-4)' }}>
               {workout.description}
             </p>
           )}
         </div>
       </div>
+
+      {/* Structured description — warmup / main set / cooldown */}
+      {steps && (
+        <div style={{
+          background: 'var(--c-bg)', borderRadius: 10, padding: '10px 12px',
+          display: 'flex', flexDirection: 'column', gap: 7, marginBottom: 'var(--sp-4)',
+        }}>
+          {steps.map((step, i) => {
+            const sc = stepColors(i, steps.length)
+            return (
+              <div key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
+                <span style={{
+                  fontSize: 10, fontWeight: 700, flexShrink: 0, marginTop: 1,
+                  background: sc.bg, color: sc.text,
+                  border: `1px solid ${sc.border}`,
+                  borderRadius: 4, padding: '1px 5px', lineHeight: 1.6,
+                }}>
+                  {stepLabel(i, steps.length)}
+                </span>
+                <span style={{ fontSize: 13, color: 'var(--c-text-2)', lineHeight: 1.45 }}>{step}</span>
+              </div>
+            )
+          })}
+        </div>
+      )}
 
       <div className="workout-hero-stats">
         {workout.distance_km && (
@@ -761,26 +846,48 @@ function WorkoutHero({ workout, isToday, nextDate, nextWeek, isDone, onToggle })
       </div>
 
       {isToday && (
-        <button
-          onClick={onToggle}
-          style={{
-            marginTop: 'var(--sp-5)', width: '100%', padding: 'var(--sp-3)',
-            borderRadius: 'var(--r-md)',
-            border: `1.5px solid ${isDone ? 'var(--c-primary)' : 'var(--c-border-light)'}`,
-            background: isDone ? 'var(--c-primary)' : 'transparent',
-            color: isDone ? '#fff' : 'var(--c-text-2)',
-            fontWeight: 600, fontSize: '0.9375rem', cursor: 'pointer',
-            transition: 'all 0.2s',
-            display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 'var(--sp-2)',
-            fontFamily: 'var(--font)',
-          }}
-        >
-          {isDone ? (
-            <><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round"><polyline points="20 6 9 17 4 12"/></svg> Erledigt</>
-          ) : (
-            <><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><polyline points="20 6 9 17 4 12"/></svg> Als erledigt markieren</>
+        <div style={{ marginTop: 'var(--sp-5)', display: 'flex', gap: 8 }}>
+          {/* Quick-Log: create log entry + open RPE modal */}
+          {!isDone && onQuickLog && (
+            <button
+              onClick={onQuickLog}
+              style={{
+                flex: 1, padding: 'var(--sp-3)',
+                borderRadius: 'var(--r-md)',
+                border: `1.5px solid ${color}`,
+                background: color + '15',
+                color,
+                fontWeight: 700, fontSize: '0.9rem', cursor: 'pointer',
+                transition: 'all 0.2s',
+                display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+                fontFamily: 'var(--font)',
+              }}
+            >
+              ⚡ Direkt eintragen
+            </button>
           )}
-        </button>
+          {/* Toggle done / undo */}
+          <button
+            onClick={onToggle}
+            style={{
+              flex: 1, padding: 'var(--sp-3)',
+              borderRadius: 'var(--r-md)',
+              border: `1.5px solid ${isDone ? 'var(--c-primary)' : 'var(--c-border-light)'}`,
+              background: isDone ? 'var(--c-primary)' : 'transparent',
+              color: isDone ? '#fff' : 'var(--c-text-2)',
+              fontWeight: 600, fontSize: '0.9rem', cursor: 'pointer',
+              transition: 'all 0.2s',
+              display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+              fontFamily: 'var(--font)',
+            }}
+          >
+            {isDone ? (
+              <><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round"><polyline points="20 6 9 17 4 12"/></svg> Erledigt</>
+            ) : (
+              <><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><polyline points="20 6 9 17 4 12"/></svg> Abhaken</>
+            )}
+          </button>
+        </div>
       )}
     </div>
   )
@@ -1234,6 +1341,47 @@ function StravaFeedbackCard({ user, run, runWorkoutType, queuePosition, onSubmit
       >
         {saving ? 'Speichern…' : 'Speichern & Plan anpassen'}
       </button>
+    </div>
+  )
+}
+
+// ── Weekly AI Feedback Card ────────────────────────────────────────────────────
+// Shows KI-generated Sunday-evening weekly recap from profiles.weekly_feedback
+function WeeklyFeedbackCard({ weeklyFeedback }) {
+  if (!weeklyFeedback?.text) return null
+
+  // Only show if from this week (weekStart = Monday ISO string)
+  const today = new Date()
+  today.setHours(0, 0, 0, 0)
+  const dow = today.getDay()
+  const monday = new Date(today)
+  monday.setDate(today.getDate() - (dow === 0 ? 6 : dow - 1))
+  const mondayStr = monday.toISOString().split('T')[0]
+  if (weeklyFeedback.weekStart < mondayStr) return null
+
+  return (
+    <div style={{
+      background: 'var(--c-card)',
+      border: '1px solid var(--c-border)',
+      borderLeft: '3px solid var(--c-primary)',
+      borderRadius: '0 14px 14px 0',
+      padding: '14px 16px',
+      display: 'flex', alignItems: 'flex-start', gap: 12,
+    }}>
+      <span style={{ fontSize: 26, flexShrink: 0, lineHeight: 1.2 }}>
+        {weeklyFeedback.emoji || '🤖'}
+      </span>
+      <div style={{ flex: 1 }}>
+        <div style={{
+          fontSize: 11, fontWeight: 700, color: 'var(--c-primary)',
+          textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: 5,
+        }}>
+          KI-Wochenfeedback
+        </div>
+        <div style={{ fontSize: 13, color: 'var(--c-text-2)', lineHeight: 1.55 }}>
+          {weeklyFeedback.text}
+        </div>
+      </div>
     </div>
   )
 }
