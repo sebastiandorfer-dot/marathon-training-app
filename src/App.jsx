@@ -844,6 +844,7 @@ Antworte mit JSON: {"text": "...", "emoji": "✅|⚠️|🔥|💪|😤"}`,
               profile={profile}
               workoutLogs={allWorkoutLogs}
               stravaRuns={stravaRuns}
+              trainingPlan={trainingPlan}
             />
           )}
           {activeTab === 'profile' && (

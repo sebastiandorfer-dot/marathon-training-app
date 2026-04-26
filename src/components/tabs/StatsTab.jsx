@@ -7,6 +7,7 @@ import {
   calculateVO2max,
   deriveMaxHR,
 } from '../../utils/fitnessUtils'
+import { getPlanStartDate } from '../../utils/planUtils'
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
@@ -113,9 +114,9 @@ function calcGoalProgress(goal, stravaRuns, workoutLogs) {
     }
     const predictedSec = bestPace * km
     if (!targetSec) {
-      // No target time — just show prediction, 50% progress as baseline
+      // No target time — show current prediction, progress = 0 (no target to measure against)
       return {
-        pct: 0.5,
+        pct: 0,
         current: formatFinishTime(Math.round(predictedSec)),
         target: 'Kein Zeitlimit',
         label: 'Prognose',
@@ -133,6 +134,82 @@ function calcGoalProgress(goal, stravaRuns, workoutLogs) {
   }
 
   return { pct: 0, current: '—', target: '—', label: '', achieved: false }
+}
+
+/**
+ * Estimate when a goal will be achieved.
+ * Returns { date, source: 'plan'|'estimate'|'achieved', weeksAway, weekNum? } or null.
+ */
+function estimateAchievementDate(goal, stravaRuns, trainingPlan, profile) {
+  const today = new Date()
+  today.setHours(0, 0, 0, 0)
+
+  // ── Distance goal ─────────────────────────────────────────────────────────
+  if (goal.type === 'distance') {
+    const target = goal.target_distance_km
+    const current = longestRun(stravaRuns, 90)
+    if (current >= target) return { date: today, source: 'achieved', weeksAway: 0 }
+
+    // Scan training plan for first long run >= target
+    if (trainingPlan?.plan_data?.weeks && profile?.marathon_date) {
+      try {
+        const planStart = getPlanStartDate(profile.marathon_date)
+        for (const week of trainingPlan.plan_data.weeks) {
+          const workouts = week.workouts || []
+          // Find the longest workout in this week (long runs are usually marked 'long')
+          const candidates = workouts
+            .filter(w => w.type === 'long' || w.workout_type === 'long')
+            .sort((a, b) => (b.distance_km || 0) - (a.distance_km || 0))
+          const longRun = candidates[0]
+          if (!longRun) continue
+          const longKm = longRun.distance_km || longRun.target_distance_km
+          if (!longKm || longKm < target) continue
+          const weekDate = new Date(planStart)
+          weekDate.setDate(planStart.getDate() + (week.week - 1) * 7 + (longRun.day_of_week ?? 5))
+          if (weekDate >= today) {
+            const weeksAway = Math.ceil((weekDate - today) / (7 * 24 * 60 * 60 * 1000))
+            return { date: weekDate, source: 'plan', weeksAway, weekNum: week.week }
+          }
+        }
+      } catch (_) { /* ignore */ }
+    }
+
+    // Fallback: 10% weekly progression from current longest run
+    if (current <= 0) return null
+    let km = current
+    let weeks = 0
+    while (km < target && weeks < 52) { km *= 1.1; weeks++ }
+    if (weeks >= 52) return null
+    const date = new Date(today)
+    date.setDate(today.getDate() + weeks * 7)
+    return { date, source: 'estimate', weeksAway: weeks }
+  }
+
+  // ── Time / Race goal ──────────────────────────────────────────────────────
+  if (goal.type === 'time' || goal.type === 'race') {
+    const targetKm = goal.race_distance_km ||
+      RACE_DISTANCES.find(d => d.id === goal.race_distance)?.km || 5
+    const targetSec = goal.target_time_sec
+    if (!targetSec) return null
+
+    // Try to get current pace from runs ≥ 50% of target distance; fall back to any recent run
+    const currentPace = bestPaceForDistance(stravaRuns, targetKm * 0.5) ||
+      bestPaceForDistance(stravaRuns, 1, 365)
+    if (!currentPace) return null
+
+    if (currentPace * targetKm <= targetSec) return { date: today, source: 'achieved', weeksAway: 0 }
+
+    // 0.8% per week pace improvement
+    let pace = currentPace
+    let weeks = 0
+    while (pace * targetKm > targetSec && weeks < 104) { pace *= 0.992; weeks++ }
+    if (weeks >= 104) return null
+    const date = new Date(today)
+    date.setDate(today.getDate() + weeks * 7)
+    return { date, source: 'estimate', weeksAway: weeks }
+  }
+
+  return null
 }
 
 function progressColor(pct) {
@@ -301,9 +378,13 @@ function VolumeChart({ data }) {
 
 // ── Goal Card ──────────────────────────────────────────────────────────────────
 
-function GoalCard({ goal, stravaRuns, workoutLogs, onDelete, onAchieve }) {
+function GoalCard({ goal, stravaRuns, workoutLogs, trainingPlan, profile, onDelete, onAchieve }) {
   const [confirmDelete, setConfirmDelete] = useState(false)
   const prog = useMemo(() => calcGoalProgress(goal, stravaRuns, workoutLogs), [goal, stravaRuns, workoutLogs])
+  const prediction = useMemo(
+    () => estimateAchievementDate(goal, stravaRuns, trainingPlan, profile),
+    [goal, stravaRuns, trainingPlan, profile]
+  )
   const col = progressColor(prog.pct)
 
   const raceLabel = RACE_DISTANCES.find(d => d.id === goal.race_distance)?.label || ''
@@ -370,6 +451,39 @@ function GoalCard({ goal, stravaRuns, workoutLogs, onDelete, onAchieve }) {
           <div style={{ fontSize: 15, fontWeight: 700, color: col }}>{Math.round(prog.pct * 100)}%</div>
         </div>
       </div>
+
+      {/* Prediction */}
+      {prediction && !prog.achieved && prediction.source !== 'achieved' && (
+        <div style={{
+          marginTop: 10, paddingTop: 10,
+          borderTop: '1px solid var(--c-border)',
+          display: 'flex', alignItems: 'center', gap: 6,
+        }}>
+          <span style={{ fontSize: 14 }}>{prediction.source === 'plan' ? '📋' : '🔮'}</span>
+          <div>
+            <span style={{ fontSize: 11, color: 'var(--c-text-3)', marginRight: 4 }}>
+              {prediction.source === 'plan' ? 'Laut Trainingsplan:' : 'Prognose:'}
+            </span>
+            <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--c-text-2)' }}>
+              {prediction.source === 'plan'
+                ? `Woche ${prediction.weekNum} · ${prediction.date.toLocaleDateString('de-AT', { day: 'numeric', month: 'short', year: 'numeric' })}`
+                : prediction.weeksAway <= 1
+                  ? 'Diese Woche erreichbar'
+                  : `~${prediction.weeksAway} Wochen · ${prediction.date.toLocaleDateString('de-AT', { day: 'numeric', month: 'short', year: 'numeric' })}`
+              }
+            </span>
+          </div>
+        </div>
+      )}
+      {prediction?.source === 'achieved' && !prog.achieved && (
+        <div style={{
+          marginTop: 10, paddingTop: 10,
+          borderTop: '1px solid var(--c-border)',
+          fontSize: 12, color: '#22c55e', fontWeight: 600,
+        }}>
+          ✅ Bereits schaffbar — markiere es als erreicht!
+        </div>
+      )}
 
       {/* Confirm delete */}
       {confirmDelete && (
@@ -626,7 +740,7 @@ function AddGoalForm({ onSave, onCancel }) {
 
 // ── Main StatsTab ──────────────────────────────────────────────────────────────
 
-export default function StatsTab({ user, profile, workoutLogs, stravaRuns }) {
+export default function StatsTab({ user, profile, workoutLogs, stravaRuns, trainingPlan }) {
   const [goals, setGoals] = useState([])
   const [showAdd, setShowAdd] = useState(false)
 
@@ -745,6 +859,8 @@ export default function StatsTab({ user, profile, workoutLogs, stravaRuns }) {
                     goal={goal}
                     stravaRuns={stravaRuns}
                     workoutLogs={workoutLogs}
+                    trainingPlan={trainingPlan}
+                    profile={profile}
                     onDelete={handleDeleteGoal}
                     onAchieve={handleAchieveGoal}
                   />
