@@ -137,8 +137,45 @@ function calcGoalProgress(goal, stravaRuns, workoutLogs) {
 }
 
 /**
+ * Riegel's race time prediction formula: T2 = T1 × (D2/D1)^1.06
+ * More accurate than linear pace scaling because longer races are run slower.
+ */
+function riegelPredict(knownTimeSec, knownDistKm, targetDistKm) {
+  if (!knownTimeSec || !knownDistKm || !targetDistKm) return null
+  return knownTimeSec * Math.pow(targetDistKm / knownDistKm, 1.06)
+}
+
+/**
+ * Best projected finish time for targetKm, using Riegel from the closest qualifying runs.
+ * Accepts runs between 20% and 120% of target distance for projection.
+ */
+function bestProjectedTime(stravaRuns, targetKm, days = 90) {
+  const cutoff = Date.now() - days * 24 * 60 * 60 * 1000
+  const qualifying = stravaRuns.filter(r =>
+    r.average_speed &&
+    r.distance >= targetKm * 0.2 * 1000 &&
+    r.distance <= targetKm * 1.2 * 1000 &&
+    new Date(r.start_date).getTime() > cutoff
+  )
+  if (!qualifying.length) return null
+  const projections = qualifying.map(r => {
+    const runKm = r.distance / 1000
+    const runTimeSec = (r.distance / r.average_speed) // meters / (m/s) = seconds
+    return riegelPredict(runTimeSec, runKm, targetKm)
+  }).filter(Boolean)
+  return projections.length ? Math.min(...projections) : null
+}
+
+/**
  * Estimate when a goal will be achieved.
  * Returns { date, source: 'plan'|'estimate'|'achieved', weeksAway, weekNum? } or null.
+ *
+ * Distance: scans training plan for first long run >= target (needs distance_km set by AI).
+ *   Fallback: 10%/week long-run progression (the classic "10% rule").
+ *
+ * Time/Race: uses Riegel projection from real runs + 0.5%/week improvement.
+ *   0.5%/week = ~23% over a year — realistic for dedicated recreational runners.
+ *   (0.8%/week would compound to ~35%/year — only valid for absolute beginners.)
  */
 function estimateAchievementDate(goal, stravaRuns, trainingPlan, profile) {
   const today = new Date()
@@ -150,20 +187,16 @@ function estimateAchievementDate(goal, stravaRuns, trainingPlan, profile) {
     const current = longestRun(stravaRuns, 90)
     if (current >= target) return { date: today, source: 'achieved', weeksAway: 0 }
 
-    // Scan training plan for first long run >= target
+    // Scan training plan — only use weeks where the long run has distance_km explicitly set
     if (trainingPlan?.plan_data?.weeks && profile?.marathon_date) {
       try {
         const planStart = getPlanStartDate(profile.marathon_date)
         for (const week of trainingPlan.plan_data.weeks) {
-          const workouts = week.workouts || []
-          // Find the longest workout in this week (long runs are usually marked 'long')
-          const candidates = workouts
-            .filter(w => w.type === 'long' || w.workout_type === 'long')
-            .sort((a, b) => (b.distance_km || 0) - (a.distance_km || 0))
-          const longRun = candidates[0]
-          if (!longRun) continue
-          const longKm = longRun.distance_km || longRun.target_distance_km
-          if (!longKm || longKm < target) continue
+          const longRuns = (week.workouts || [])
+            .filter(w => w.type === 'long' && typeof w.distance_km === 'number' && w.distance_km > 0)
+            .sort((a, b) => b.distance_km - a.distance_km)
+          const longRun = longRuns[0]
+          if (!longRun || longRun.distance_km < target) continue
           const weekDate = new Date(planStart)
           weekDate.setDate(planStart.getDate() + (week.week - 1) * 7 + (longRun.day_of_week ?? 5))
           if (weekDate >= today) {
@@ -174,11 +207,11 @@ function estimateAchievementDate(goal, stravaRuns, trainingPlan, profile) {
       } catch (_) { /* ignore */ }
     }
 
-    // Fallback: 10% weekly progression from current longest run
+    // Fallback: 10%/week progression from current longest run
     if (current <= 0) return null
     let km = current
     let weeks = 0
-    while (km < target && weeks < 52) { km *= 1.1; weeks++ }
+    while (km < target && weeks < 52) { km *= 1.10; weeks++ }
     if (weeks >= 52) return null
     const date = new Date(today)
     date.setDate(today.getDate() + weeks * 7)
@@ -192,17 +225,17 @@ function estimateAchievementDate(goal, stravaRuns, trainingPlan, profile) {
     const targetSec = goal.target_time_sec
     if (!targetSec) return null
 
-    // Try to get current pace from runs ≥ 50% of target distance; fall back to any recent run
-    const currentPace = bestPaceForDistance(stravaRuns, targetKm * 0.5) ||
-      bestPaceForDistance(stravaRuns, 1, 365)
-    if (!currentPace) return null
+    // Riegel projection: prefer recent 90-day window, fall back to 365 days
+    const projectedSec = bestProjectedTime(stravaRuns, targetKm, 90) ||
+                         bestProjectedTime(stravaRuns, targetKm, 365)
+    if (!projectedSec) return null
 
-    if (currentPace * targetKm <= targetSec) return { date: today, source: 'achieved', weeksAway: 0 }
+    if (projectedSec <= targetSec) return { date: today, source: 'achieved', weeksAway: 0 }
 
-    // 0.8% per week pace improvement
-    let pace = currentPace
+    // 0.5%/week improvement — conservative but realistic for recreational runners
+    let timeSec = projectedSec
     let weeks = 0
-    while (pace * targetKm > targetSec && weeks < 104) { pace *= 0.992; weeks++ }
+    while (timeSec > targetSec && weeks < 104) { timeSec *= 0.995; weeks++ }
     if (weeks >= 104) return null
     const date = new Date(today)
     date.setDate(today.getDate() + weeks * 7)
