@@ -51,6 +51,7 @@ export default function App() {
 
   const [generateError, setGenerateError] = useState('')
   const [onboardingData, setOnboardingData] = useState(null)
+  const [stravaError, setStravaError] = useState(null) // null | 'token' | 'network'
 
   // AI-generated adaptive plan
   const [aiPlan, setAiPlan] = useState(null)
@@ -605,7 +606,10 @@ Antworte mit JSON: {"text": "...", "emoji": "✅|⚠️|🔥|💪|😤"}`,
     if (Date.now() - lastSyncTime < 30 * 60 * 1000) return // skip if synced <30min ago
     try {
       const token = await getValidToken(currentProfile, supabase)
-      if (!token) return
+      if (!token) {
+        setStravaError('token') // token expired / revoked — user needs to reconnect
+        return
+      }
       const runs = await fetchAllStravaRuns(token)
       if (!runs.length) return
       const rows = runs.map(r => ({
@@ -646,6 +650,7 @@ Antworte mit JSON: {"text": "...", "emoji": "✅|⚠️|🔥|💪|😤"}`,
         setPendingStravaQueue(buildFeedbackQueue(syncRuns, syncInserted))
       }
       setStravaRuns(merged)
+      setStravaError(null) // sync succeeded — clear any previous error
       const now = new Date().toISOString()
       await supabase.from('profiles').update({ strava_last_sync: now }).eq('id', currentProfile.id)
       setProfile(p => p ? { ...p, strava_last_sync: now } : p)
@@ -660,6 +665,7 @@ Antworte mit JSON: {"text": "...", "emoji": "✅|⚠️|🔥|💪|😤"}`,
         .catch(() => {})
     } catch (err) {
       console.warn('Auto Strava sync failed:', err)
+      setStravaError('network')
     }
   }, [])
 
@@ -855,6 +861,8 @@ Antworte mit JSON: {"text": "...", "emoji": "✅|⚠️|🔥|💪|😤"}`,
               workoutLogs={allWorkoutLogs}
               completedWorkoutIds={completedWorkoutIds}
               stravaRuns={stravaRuns}
+              stravaError={stravaError}
+              onStravaErrorDismiss={() => setStravaError(null)}
               onProfileUpdate={handleProfileUpdate}
               onSignOut={handleSignOut}
               onRegeneratePlan={handleRegeneratePlan}

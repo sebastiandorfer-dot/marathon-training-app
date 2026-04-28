@@ -21,7 +21,7 @@ const DAYS_FULL = ['Montag', 'Dienstag', 'Mittwoch', 'Donnerstag', 'Freitag', 'S
 
 const DAYS_SHORT_PROFILE = ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So']
 
-export default function ProfileTab({ user, profile, trainingPlan, workoutLogs, completedWorkoutIds, stravaRuns = [], onProfileUpdate, onSignOut, onRegeneratePlan, onDeletePlan }) {
+export default function ProfileTab({ user, profile, trainingPlan, workoutLogs, completedWorkoutIds, stravaRuns = [], stravaError = null, onStravaErrorDismiss, onProfileUpdate, onSignOut, onRegeneratePlan, onDeletePlan }) {
   const [editingContext, setEditingContext] = useState(false)
   const [contextValue, setContextValue] = useState(profile.context || '')
   const [savingContext, setSavingContext] = useState(false)
@@ -177,6 +177,31 @@ export default function ProfileTab({ user, profile, trainingPlan, workoutLogs, c
 
       <div className="screen-scroll">
         <div className="screen-content" style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-5)' }}>
+
+          {/* Strava sync error banner */}
+          {stravaError && (
+            <div style={{
+              background: '#ef444411', border: '1px solid #ef444444',
+              borderRadius: 12, padding: '12px 16px',
+              display: 'flex', alignItems: 'flex-start', gap: 10,
+            }}>
+              <span style={{ fontSize: 18, flexShrink: 0 }}>⚠️</span>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontWeight: 700, fontSize: 13, color: '#ef4444', marginBottom: 2 }}>
+                  Strava-Verbindung unterbrochen
+                </div>
+                <div style={{ fontSize: 12, color: 'var(--c-text-2)', lineHeight: 1.5 }}>
+                  {stravaError === 'token'
+                    ? 'Deine Strava-Autorisierung ist abgelaufen. Trenne Strava und verbinde es erneut.'
+                    : 'Strava konnte nicht synchronisiert werden. Prüfe deine Internetverbindung.'}
+                </div>
+              </div>
+              <button onClick={onStravaErrorDismiss}
+                style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--c-text-3)', fontSize: 16, padding: '0 2px', flexShrink: 0, lineHeight: 1 }}>
+                ✕
+              </button>
+            </div>
+          )}
 
           {/* Profile header */}
           <div className="card" style={{ display: 'flex', gap: 'var(--sp-4)', alignItems: 'center' }}>
