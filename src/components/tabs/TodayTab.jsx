@@ -1,6 +1,6 @@
 import { useState, useMemo, useEffect, useRef } from 'react'
 import { supabase } from '../../supabase'
-import { getPaceTargetRange } from '../../utils/stravaUtils'
+import { getPaceTargetRange, getStravaAuthUrl } from '../../utils/stravaUtils'
 import { deriveMaxHR, getHRZone } from '../../utils/fitnessUtils'
 import {
   getCurrentPlanPosition,
@@ -103,7 +103,7 @@ function useCoachIdentity(user) {
   return { coachName, firstName, avatarUrl }
 }
 
-export default function TodayTab({ user, profile, trainingPlan, completedWorkoutIds, onToggleComplete, workoutLogs, onLogAdded, onLogDeleted, stravaRuns = [], onConfirmRacePlan, aiPlan = null, aiPlanGenerating = false, lastPlanChange = null, onPlanChangeDismiss, pendingStravaQueue = [], onStravaFeedback, onShiftWorkout }) {
+export default function TodayTab({ user, profile, trainingPlan, completedWorkoutIds, onToggleComplete, workoutLogs, onLogAdded, onLogDeleted, onLogUpdated, stravaRuns = [], onConfirmRacePlan, aiPlan = null, aiPlanGenerating = false, lastPlanChange = null, onPlanChangeDismiss, pendingStravaQueue = [], onStravaFeedback, onShiftWorkout, pendingPR = null, onPRDismiss }) {
   const maxHR = useMemo(() => deriveMaxHR(stravaRuns), [stravaRuns])
   // First item in the queue is the currently shown feedback card
   const pendingStravaFeedback = pendingStravaQueue[0] ?? null
@@ -152,6 +152,10 @@ export default function TodayTab({ user, profile, trainingPlan, completedWorkout
   const [rpeWorkoutType, setRpeWorkoutType] = useState(null)
   const [rpeSaving, setRpeSaving] = useState(false)
   const [showPaceFeedback, setShowPaceFeedback] = useState(false)
+  const [editingLogId, setEditingLogId] = useState(null)
+  const [editForm, setEditForm] = useState({})
+  const [editSaving, setEditSaving] = useState(false)
+  const [stravaDiscoveryDismissed, setStravaDiscoveryDismissed] = useState(false)
 
   const displayWorkout = todayWorkout || nextWorkout?.workout
 
@@ -254,6 +258,40 @@ export default function TodayTab({ user, profile, trainingPlan, completedWorkout
     }
   }
 
+  function startEdit(log) {
+    setEditingLogId(log.id)
+    setEditForm({
+      workout_date: log.workout_date,
+      workout_type: log.workout_type || 'easy',
+      distance_km: log.distance_km ?? '',
+      duration_min: log.duration_min ?? '',
+      notes: log.notes?.startsWith('strava:') ? '' : (log.notes ?? ''),
+      rpe: log.rpe ?? null,
+    })
+  }
+
+  async function saveEdit() {
+    if (!editingLogId) return
+    setEditSaving(true)
+    try {
+      const { data, error } = await supabase.from('workout_logs').update({
+        workout_date: editForm.workout_date,
+        workout_type: editForm.workout_type,
+        distance_km: editForm.distance_km !== '' ? parseFloat(editForm.distance_km) : null,
+        duration_min: editForm.duration_min !== '' ? parseFloat(editForm.duration_min) : null,
+        notes: editForm.notes?.trim() || null,
+        rpe: editForm.rpe || null,
+      }).eq('id', editingLogId).select().single()
+      if (error) throw error
+      if (data) onLogUpdated?.(data)
+      setEditingLogId(null)
+    } catch (err) {
+      console.error('Edit failed:', err)
+    } finally {
+      setEditSaving(false)
+    }
+  }
+
   // workoutLogs already contains merged strava runs (passed from App.jsx as allWorkoutLogs)
   const recentLogs = [...workoutLogs]
     .sort((a, b) => new Date(b.workout_date) - new Date(a.workout_date))
@@ -329,6 +367,11 @@ export default function TodayTab({ user, profile, trainingPlan, completedWorkout
             />
           )}
 
+          {/* PERSONAL RECORD BANNER */}
+          {pendingPR && (
+            <PRBanner pr={pendingPR} onDismiss={onPRDismiss} />
+          )}
+
           {/* RACE-DAY COUNTDOWN — ≤21 Tage bis Marathon */}
           {daysLeft !== null && daysLeft <= 21 && daysLeft >= 0 && (
             <RaceDayCountdown daysLeft={daysLeft} marathonName={profile.marathon_name} />
@@ -369,6 +412,30 @@ export default function TodayTab({ user, profile, trainingPlan, completedWorkout
               aiPlanGenerating={aiPlanGenerating}
             />
           ) : (<>
+
+          {/* PLAN COMPLETION CARD — shown when the 18-week plan is done */}
+          {pos.status === 'finished' && trainingMode === 'race' && (
+            <PlanCompletionCard
+              marathonName={profile.marathon_name}
+              marathonDate={profile.marathon_date}
+            />
+          )}
+
+          {/* WEEK STRIP — Mo–So overview of current plan week */}
+          {trainingMode === 'race' && pos.status === 'active' && trainingPlan && (
+            <WeekStrip
+              trainingPlan={trainingPlan}
+              profile={profile}
+              completedWorkoutIds={completedWorkoutIds}
+              workoutLogs={workoutLogs}
+              pos={pos}
+            />
+          )}
+
+          {/* REST DAY CARD — when today has no planned workout but plan is active */}
+          {trainingMode === 'race' && pos.status === 'active' && trainingPlan && !todayWorkout && nextWorkout && (
+            <RestDayCard nextWorkout={nextWorkout} />
+          )}
 
           {/* Quick-Log Button — always visible at top */}
           <button
@@ -503,16 +570,76 @@ export default function TodayTab({ user, profile, trainingPlan, completedWorkout
             />
           )}
 
+          {/* STRAVA DISCOVERY BANNER — shown when user has logs but no Strava */}
+          {!profile.strava_access_token && workoutLogs.length > 0 && !stravaDiscoveryDismissed && (
+            <StravaDiscoveryBanner onDismiss={() => setStravaDiscoveryDismissed(true)} />
+          )}
+
           {/* Recent Activity */}
           {recentLogs.length > 0 && (
             <div>
               <h3 style={{ marginBottom: 'var(--sp-3)', fontSize: '1rem' }}>Letzte Aktivitäten</h3>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-2)' }}>
                 {recentLogs.map(log => {
+                  // Inline edit form
+                  if (editingLogId === log.id) {
+                    return (
+                      <div key={log.id} className="card card-sm" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                        <div style={{ display: 'flex', gap: 8 }}>
+                          <div className="form-group" style={{ flex: 1 }}>
+                            <label className="form-label" style={{ fontSize: 11 }}>Datum</label>
+                            <input type="date" className="form-input" style={{ fontSize: 13, padding: '6px 8px' }}
+                              value={editForm.workout_date} max={todayStr()}
+                              onChange={e => setEditForm(f => ({ ...f, workout_date: e.target.value }))} />
+                          </div>
+                          <div className="form-group" style={{ flex: 1.5 }}>
+                            <label className="form-label" style={{ fontSize: 11 }}>Sportart</label>
+                            <select className="form-input" style={{ fontSize: 13, padding: '6px 8px' }}
+                              value={editForm.workout_type}
+                              onChange={e => setEditForm(f => ({ ...f, workout_type: e.target.value }))}>
+                              {WORKOUT_TYPES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
+                            </select>
+                          </div>
+                        </div>
+                        <div style={{ display: 'flex', gap: 8 }}>
+                          <div className="form-group" style={{ flex: 1 }}>
+                            <label className="form-label" style={{ fontSize: 11 }}>Distanz (km)</label>
+                            <input type="number" className="form-input" style={{ fontSize: 13, padding: '6px 8px' }}
+                              placeholder="0.0" min={0} step={0.1} value={editForm.distance_km}
+                              onChange={e => setEditForm(f => ({ ...f, distance_km: e.target.value }))} />
+                          </div>
+                          <div className="form-group" style={{ flex: 1 }}>
+                            <label className="form-label" style={{ fontSize: 11 }}>Dauer (min)</label>
+                            <input type="number" className="form-input" style={{ fontSize: 13, padding: '6px 8px' }}
+                              placeholder="60" min={0} step={1} value={editForm.duration_min}
+                              onChange={e => setEditForm(f => ({ ...f, duration_min: e.target.value }))} />
+                          </div>
+                        </div>
+                        <div className="form-group">
+                          <label className="form-label" style={{ fontSize: 11 }}>Notizen</label>
+                          <input type="text" className="form-input" style={{ fontSize: 13, padding: '6px 8px' }}
+                            placeholder="optional" value={editForm.notes}
+                            onChange={e => setEditForm(f => ({ ...f, notes: e.target.value }))} />
+                        </div>
+                        <div style={{ display: 'flex', gap: 8 }}>
+                          <button onClick={saveEdit} disabled={editSaving}
+                            style={{ flex: 1, padding: '9px 0', borderRadius: 8, border: 'none', background: 'var(--c-primary)', color: '#fff', fontWeight: 700, fontSize: 13, cursor: 'pointer', fontFamily: 'var(--font)', opacity: editSaving ? 0.6 : 1 }}>
+                            {editSaving ? 'Speichern…' : 'Speichern'}
+                          </button>
+                          <button onClick={() => setEditingLogId(null)}
+                            style={{ padding: '9px 16px', borderRadius: 8, border: '1px solid var(--c-border)', background: 'transparent', color: 'var(--c-text-3)', fontSize: 13, cursor: 'pointer', fontFamily: 'var(--font)' }}>
+                            Abbrechen
+                          </button>
+                        </div>
+                      </div>
+                    )
+                  }
+
                   const color = TYPE_COLORS[log.workout_type] || 'var(--c-text-2)'
                   const icon = TYPE_ICONS[log.workout_type] || '📝'
                   const rpeEmoji = log.rpe ? (log.rpe <= 4 ? '😌' : log.rpe <= 7 ? '💪' : '🔥') : null
                   const hrZone = maxHR && log.average_heartrate ? getHRZone(log.average_heartrate, maxHR) : null
+                  const canEdit = onLogUpdated && !log._fromStrava && typeof log.id === 'number'
                   return (
                     <div key={log.id} className="card card-sm" style={{ display: 'flex', gap: 'var(--sp-3)', alignItems: 'center' }}>
                       <div style={{
@@ -548,6 +675,17 @@ export default function TodayTab({ user, profile, trainingPlan, completedWorkout
                       <div style={{ fontSize: '0.75rem', color: 'var(--c-text-3)', flexShrink: 0 }}>
                         {formatRelativeDate(log.workout_date)}
                       </div>
+                      {canEdit && (
+                        <button
+                          onClick={() => startEdit(log)}
+                          style={{
+                            background: 'transparent', border: 'none', color: 'var(--c-text-3)',
+                            cursor: 'pointer', padding: '4px 5px', fontSize: 14, flexShrink: 0,
+                            borderRadius: 6, lineHeight: 1,
+                          }}
+                          title="Bearbeiten"
+                        >✏️</button>
+                      )}
                       {onLogDeleted && (
                         <button
                           onClick={() => onLogDeleted(log.id)}
@@ -567,11 +705,15 @@ export default function TodayTab({ user, profile, trainingPlan, completedWorkout
           )}
 
           {recentLogs.length === 0 && !displayWorkout && (
-            <div className="empty-state">
-              <div className="empty-state-icon">👟</div>
-              <h3>Noch keine Aktivitäten</h3>
-              <p>Trag deinen ersten Sport ein!</p>
-            </div>
+            workoutLogs.length === 0 && stravaRuns.length === 0 ? (
+              <Day1WelcomeCard user={user} onLogOpen={() => setLogOpen(true)} />
+            ) : (
+              <div className="empty-state">
+                <div className="empty-state-icon">👟</div>
+                <h3>Noch keine Aktivitäten</h3>
+                <p>Trag deinen ersten Sport ein!</p>
+              </div>
+            )
           )}
           </>)}
 
@@ -1411,6 +1553,302 @@ function WeeklyFeedbackCard({ weeklyFeedback }) {
         <div style={{ fontSize: 13, color: 'var(--c-text-2)', lineHeight: 1.55 }}>
           {weeklyFeedback.text}
         </div>
+      </div>
+    </div>
+  )
+}
+
+// ── PR Banner ──────────────────────────────────────────────────────────────────
+// Celebratory dismissible card when a new personal record is detected from Strava.
+function PRBanner({ pr, onDismiss }) {
+  const fmtPace = sec => `${Math.floor(sec / 60)}:${String(Math.round(sec % 60)).padStart(2, '0')}/km`
+  const improvement = pr.prevPace ? Math.round(((pr.prevPace - pr.pace) / pr.prevPace) * 100) : null
+
+  return (
+    <div style={{
+      background: 'linear-gradient(135deg, #f59e0b18, var(--c-card))',
+      border: '2px solid #f59e0b66', borderRadius: 14, padding: '14px 16px',
+      display: 'flex', alignItems: 'flex-start', gap: 12,
+      animation: 'fadeInDown 0.3s ease',
+    }}>
+      <span style={{ fontSize: 28, flexShrink: 0 }}>🏅</span>
+      <div style={{ flex: 1 }}>
+        <div style={{ fontWeight: 800, fontSize: 15, color: '#f59e0b', marginBottom: 3 }}>
+          Neue persönliche Bestzeit!
+        </div>
+        <div style={{ fontSize: 13, color: 'var(--c-text)', fontWeight: 600 }}>
+          {pr.category} · {fmtPace(pr.pace)}
+          {improvement !== null && improvement > 0 && (
+            <span style={{ color: '#22c55e', marginLeft: 6, fontSize: 12 }}>
+              ({improvement}% schneller)
+            </span>
+          )}
+        </div>
+        {pr.prevPace && (
+          <div style={{ fontSize: 12, color: 'var(--c-text-3)', marginTop: 2 }}>
+            Vorher: {fmtPace(pr.prevPace)}
+          </div>
+        )}
+      </div>
+      <button onClick={onDismiss}
+        style={{ background: 'none', border: 'none', color: 'var(--c-text-3)', fontSize: 18, cursor: 'pointer', lineHeight: 1, flexShrink: 0 }}>
+        ×
+      </button>
+    </div>
+  )
+}
+
+// ── Week Strip ─────────────────────────────────────────────────────────────────
+// Horizontal Mo–So overview of the current training plan week.
+function WeekStrip({ trainingPlan, profile, completedWorkoutIds, workoutLogs, pos }) {
+  const week = trainingPlan?.plan_data?.weeks?.find(w => w.week === pos.week)
+  if (!week) return null
+
+  const today = new Date()
+  today.setHours(0, 0, 0, 0)
+  const todayDow = today.getDay() === 0 ? 6 : today.getDay() - 1 // 0=Mon, 6=Sun
+  const monday = getMondayOf(today)
+
+  const DAYS = ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So']
+  const ICONS = { easy: '🏃', tempo: '⚡', interval: '🔥', long: '🛣️', recovery: '🌿', cross: '🚴', strength: '🏋️', rest: '·' }
+  const COLORS = { easy: 'var(--c-easy)', tempo: 'var(--c-tempo)', interval: 'var(--c-interval)', long: 'var(--c-long)', recovery: 'var(--c-recovery)', cross: 'var(--c-cross)' }
+
+  return (
+    <div style={{
+      background: 'var(--c-card)', border: '1px solid var(--c-border)',
+      borderRadius: 12, padding: '10px 12px',
+    }}>
+      <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--c-text-3)', textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: 8 }}>
+        Woche {pos.week} · {week.theme || 'Training'}
+      </div>
+      <div style={{ display: 'flex', gap: 4, justifyContent: 'space-between' }}>
+        {DAYS.map((label, i) => {
+          const workout = (week.workouts || []).find(w => w.day_of_week === i)
+          const isDone = workout && completedWorkoutIds.includes(workout.id)
+          const isToday = i === todayDow
+          const isPast = i < todayDow
+
+          // Check if there's a manual log on this day
+          const dayDate = new Date(monday)
+          dayDate.setDate(monday.getDate() + i)
+          const dayDateStr = dayDate.toISOString().split('T')[0]
+          const hasLog = workoutLogs.some(l => l.workout_date === dayDateStr)
+
+          const filled = isDone || hasLog
+          const color = workout ? (COLORS[workout.type] || 'var(--c-primary)') : null
+          const icon = workout ? (ICONS[workout.type] || '📝') : null
+
+          return (
+            <div key={i} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 }}>
+              <div style={{
+                fontSize: 9, fontWeight: isToday ? 800 : 400,
+                color: isToday ? 'var(--c-primary)' : isPast ? 'var(--c-text-3)' : 'var(--c-text-2)',
+              }}>
+                {label}
+              </div>
+              <div style={{
+                width: 30, height: 30, borderRadius: '50%',
+                background: filled ? (color || '#22c55e') + '33' : workout ? color + '15' : 'transparent',
+                border: `2px solid ${isToday ? 'var(--c-primary)' : filled ? (color || '#22c55e') + '88' : workout ? color + '44' : 'var(--c-border)'}`,
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                fontSize: filled ? 11 : 13,
+                transition: 'all 0.2s',
+              }}>
+                {filled
+                  ? <span style={{ color: color || '#22c55e', fontWeight: 700 }}>✓</span>
+                  : icon
+                    ? <span style={{ opacity: isPast ? 0.4 : 1 }}>{icon}</span>
+                    : <span style={{ color: 'var(--c-border)', fontSize: 16, lineHeight: 1 }}>·</span>
+                }
+              </div>
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+// ── Rest Day Card ──────────────────────────────────────────────────────────────
+// Shown on planned rest days in an active 18-week plan.
+const REST_TIPS = [
+  'Aktive Erholung — leichtes Spazierengehen oder Yoga helfen beim Regenerieren.',
+  'Nutze den Ruhetag für ausreichend Schlaf — das ist wo echte Anpassung passiert.',
+  'Fühl dich frei zu dehnen, zu schäumen oder ein Bad zu nehmen.',
+  'Trinke viel Wasser und iss nährstoffreich — dein Körper baut heute Muskeln auf.',
+  'Mentaltraining zählt auch: visualisiere dein Rennen und deinen Plan.',
+]
+
+function RestDayCard({ nextWorkout }) {
+  const tip = REST_TIPS[new Date().getDay() % REST_TIPS.length]
+  const nextW = nextWorkout?.workout
+
+  return (
+    <div style={{
+      background: 'var(--c-card)', border: '1px solid var(--c-border)',
+      borderRadius: 14, padding: '16px 16px',
+      display: 'flex', flexDirection: 'column', gap: 10,
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+        <div style={{
+          width: 42, height: 42, borderRadius: '50%', flexShrink: 0,
+          background: 'var(--c-recovery)' + '22', border: '1px solid ' + 'var(--c-recovery)' + '44',
+          display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 22,
+        }}>💤</div>
+        <div>
+          <div style={{ fontWeight: 700, fontSize: 14, color: 'var(--c-text)' }}>Heute: Ruhetag</div>
+          <div style={{ fontSize: 12, color: 'var(--c-text-3)', marginTop: 1 }}>Erholung ist Teil des Trainings</div>
+        </div>
+      </div>
+
+      <div style={{ fontSize: 13, color: 'var(--c-text-2)', lineHeight: 1.5, padding: '8px 12px', background: 'var(--c-bg)', borderRadius: 8 }}>
+        💡 {tip}
+      </div>
+
+      {nextW && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px', background: 'var(--c-bg)', borderRadius: 8 }}>
+          <span style={{ fontSize: 16 }}>
+            {({ easy: '🏃', tempo: '⚡', interval: '🔥', long: '🛣️', recovery: '🌿', cross: '🚴', strength: '🏋️' })[nextW.type] || '📝'}
+          </span>
+          <div>
+            <div style={{ fontSize: 11, color: 'var(--c-text-3)', marginBottom: 1 }}>
+              Nächste Einheit · {nextWorkout.workoutDate?.toLocaleDateString('de-AT', { weekday: 'short', month: 'short', day: 'numeric' })}
+            </div>
+            <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--c-text)' }}>
+              {nextW.title}
+              {nextW.distance_km ? ` · ${nextW.distance_km} km` : ''}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── Day 1 Welcome Card ─────────────────────────────────────────────────────────
+// Shown to brand-new users who have no logs and no Strava runs.
+function Day1WelcomeCard({ user, onLogOpen }) {
+  const { coachName, firstName, avatarUrl } = useCoachIdentity(user)
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+      {/* Coach greeting */}
+      <div style={{
+        background: 'var(--c-primary-dim)', border: '1px solid var(--c-primary)',
+        borderRadius: 14, padding: '18px 16px',
+        display: 'flex', gap: 14, alignItems: 'flex-start',
+      }}>
+        <div className="coach-avatar-pulse" style={{
+          width: 44, height: 44, borderRadius: '50%', overflow: 'hidden', flexShrink: 0,
+        }}>
+          <img src={avatarUrl} alt={coachName}
+            style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+        </div>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontWeight: 700, fontSize: 15, color: 'var(--c-primary)', marginBottom: 5 }}>
+            Willkommen, {firstName}! 👋
+          </div>
+          <div style={{ fontSize: 13, color: 'var(--c-text)', lineHeight: 1.55 }}>
+            Ich bin {coachName}, dein persönlicher KI-Trainer. Lass uns dein erstes Training eintragen oder Strava verbinden — dann kann ich dir direkt Feedback geben.
+          </div>
+        </div>
+      </div>
+
+      {/* Action cards */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+        <button onClick={onLogOpen}
+          style={{
+            padding: '16px 10px', borderRadius: 12,
+            border: '1.5px solid var(--c-primary)', background: 'var(--c-primary-dim)',
+            cursor: 'pointer', fontFamily: 'var(--font)',
+            display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6,
+          }}>
+          <span style={{ fontSize: 28 }}>➕</span>
+          <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--c-primary)' }}>Training eintragen</span>
+          <span style={{ fontSize: 11, color: 'var(--c-text-3)' }}>Manuell erfassen</span>
+        </button>
+        <a href={getStravaAuthUrl()}
+          style={{
+            padding: '16px 10px', borderRadius: 12,
+            border: '1.5px solid #FC4C02', background: '#FC4C0211',
+            cursor: 'pointer', fontFamily: 'var(--font)', textDecoration: 'none',
+            display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6,
+          }}>
+          <span style={{ fontSize: 28 }}>🔗</span>
+          <span style={{ fontSize: 13, fontWeight: 700, color: '#FC4C02' }}>Strava verbinden</span>
+          <span style={{ fontSize: 11, color: 'var(--c-text-3)' }}>Läufe auto-importieren</span>
+        </a>
+      </div>
+    </div>
+  )
+}
+
+// ── Strava Discovery Banner ────────────────────────────────────────────────────
+// Dismissible nudge shown when the user has manual logs but hasn't connected Strava.
+function StravaDiscoveryBanner({ onDismiss }) {
+  return (
+    <div style={{
+      background: '#FC4C0211', border: '1px solid #FC4C0244',
+      borderRadius: 12, padding: '12px 14px',
+      display: 'flex', alignItems: 'center', gap: 10,
+    }}>
+      <span style={{ fontSize: 24, flexShrink: 0 }}>🔗</span>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: '#FC4C02', marginBottom: 2 }}>
+          Strava verbinden
+        </div>
+        <div style={{ fontSize: 12, color: 'var(--c-text-2)', lineHeight: 1.4 }}>
+          Lass deine Läufe automatisch importieren — kein manuelles Eintragen mehr.
+        </div>
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 5, flexShrink: 0, alignItems: 'flex-end' }}>
+        <a href={getStravaAuthUrl()}
+          style={{
+            padding: '7px 14px', borderRadius: 20,
+            background: '#FC4C02', color: '#fff',
+            fontSize: 12, fontWeight: 700, textDecoration: 'none',
+            whiteSpace: 'nowrap', fontFamily: 'var(--font)',
+          }}>
+          Verbinden
+        </a>
+        <button onClick={onDismiss}
+          style={{
+            background: 'none', border: 'none', color: 'var(--c-text-3)',
+            fontSize: 11, cursor: 'pointer', fontFamily: 'var(--font)',
+            padding: '2px 0', textAlign: 'center',
+          }}>
+          Später
+        </button>
+      </div>
+    </div>
+  )
+}
+
+// ── Plan Completion Card ───────────────────────────────────────────────────────
+// Shown when the 18-week marathon training plan has been completed.
+function PlanCompletionCard({ marathonName, marathonDate }) {
+  const dateStr = marathonDate
+    ? new Date(marathonDate + 'T12:00:00').toLocaleDateString('de-AT', { day: 'numeric', month: 'long', year: 'numeric' })
+    : null
+  return (
+    <div style={{
+      background: 'linear-gradient(135deg, #22c55e18, var(--c-card))',
+      border: '2px solid #22c55e44', borderRadius: 16,
+      padding: '20px 18px', textAlign: 'center',
+    }}>
+      <div style={{ fontSize: 48, marginBottom: 10 }}>🏆</div>
+      <div style={{ fontWeight: 800, fontSize: 18, color: 'var(--c-text)', marginBottom: 6 }}>
+        Trainingsplan abgeschlossen!
+      </div>
+      {marathonName && (
+        <div style={{ fontSize: 14, fontWeight: 700, color: '#22c55e', marginBottom: 4 }}>
+          {marathonName}
+        </div>
+      )}
+      {dateStr && (
+        <div style={{ fontSize: 12, color: 'var(--c-text-3)', marginBottom: 12 }}>{dateStr}</div>
+      )}
+      <div style={{ fontSize: 13, color: 'var(--c-text-2)', lineHeight: 1.6 }}>
+        Du hast alle 18 Wochen absolviert — jetzt wird es ernst. Vertrau deinem Training und genieß den Wettkampf! 💪
       </div>
     </div>
   )

@@ -21,11 +21,20 @@ export default function CoachTab({ user, profile, trainingPlan, workoutLogs, cha
   const { coachName, firstName, avatarUrl } = useCoachIdentity(user)
   const [input, setInput] = useState('')
   const [streaming, setStreaming] = useState(false)
+  const [goals, setGoals] = useState([])
   const [error, setError] = useState('')
   const [streamingText, setStreamingText] = useState('')
   const messagesEndRef = useRef(null)
   const inputRef = useRef(null)
   const abortRef = useRef(null)
+
+  // Load active goals for prompt context
+  useEffect(() => {
+    if (!user?.id) return
+    supabase.from('goals').select('*').eq('user_id', user.id).eq('status', 'active')
+      .order('created_at', { ascending: false })
+      .then(({ data }) => { if (data) setGoals(data) })
+  }, [user?.id])
 
   // Today's planned workout — for contextual suggestions
   const todayPlan = useMemo(() => {
@@ -148,6 +157,23 @@ KI-TRAININGSPLAN (aktuell):
 `
     }
 
+    // Goals section
+    let goalsSection = ''
+    if (goals.length > 0) {
+      const fmtTime = sec => {
+        if (!sec) return '—'
+        const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = Math.round(sec % 60)
+        return h > 0 ? `${h}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}` : `${m}:${String(s).padStart(2,'0')}`
+      }
+      goalsSection = `\nAKTIVE ZIELE (${goals.length}):\n${goals.map(g => {
+        let line = `- ${g.title} (${g.type === 'race' ? 'Rennen' : g.type === 'distance' ? 'Distanz' : 'Zeit'})`
+        if (g.race_date) line += ` · ${new Date(g.race_date + 'T12:00:00').toLocaleDateString('de-AT', { day: 'numeric', month: 'short', year: 'numeric' })}`
+        if (g.target_time_sec) line += ` · Zielzeit: ${fmtTime(g.target_time_sec)}`
+        if (g.target_distance_km) line += ` · ${g.target_distance_km} km`
+        return line
+      }).join('\n')}\n`
+    }
+
     return `Du bist ${coachName}, ein erfahrener persönlicher Lauftrainer. Du kennst den Athleten sehr gut und hast Zugriff auf alle seine Trainingsdaten. Antworte immer auf Deutsch, direkt und motivierend — wie ein echter Coach, nicht wie eine KI.
 
 ATHLETENPROFIL:
@@ -166,7 +192,7 @@ ${fitnessSection}
 
 LETZTE TRAININGSEINHEITEN (aus App):
 ${recentLogs || 'Noch keine Einheiten eingetragen'}
-${aiPlanSection}
+${goalsSection}${aiPlanSection}
 COACHING-RICHTLINIEN:
 - Antworte immer auf Deutsch
 - Sei direkt, konkret und motivierend — verwende echte Daten aus dem Profil

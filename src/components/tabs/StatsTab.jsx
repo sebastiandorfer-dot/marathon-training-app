@@ -437,8 +437,11 @@ function VolumeChart({ data }) {
 
 // ── Goal Card ──────────────────────────────────────────────────────────────────
 
-function GoalCard({ goal, stravaRuns, workoutLogs, trainingPlan, profile, onDelete, onAchieve }) {
+function GoalCard({ goal, stravaRuns, workoutLogs, trainingPlan, profile, onDelete, onAchieve, onRecordResult }) {
   const [menuOpen, setMenuOpen] = useState(false)
+  const [showResultForm, setShowResultForm] = useState(false)
+  const [resultInput, setResultInput] = useState('')
+  const [resultSaving, setResultSaving] = useState(false)
   const prog = useMemo(() => calcGoalProgress(goal, stravaRuns, workoutLogs), [goal, stravaRuns, workoutLogs])
   const prediction = useMemo(
     () => estimateAchievementDate(goal, stravaRuns, trainingPlan, profile),
@@ -582,6 +585,82 @@ function GoalCard({ goal, stravaRuns, workoutLogs, trainingPlan, profile, onDele
               <span style={{ fontSize: 12, color: 'var(--c-text-3)' }}>{hint}</span>
             </>
           ) : null}
+        </div>
+      )}
+
+      {/* ── Race result prompt — appears after race date passes ──── */}
+      {goal.type === 'race' && goal.race_date &&
+       new Date(goal.race_date + 'T23:59:59') < new Date() &&
+       !prog.achieved && !goal.actual_time_sec && (
+        <div style={{
+          marginTop: 10, padding: '12px 14px',
+          background: 'var(--c-primary-dim)', border: '1px solid var(--c-primary)',
+          borderRadius: 10,
+        }}>
+          {!showResultForm ? (
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
+              <div>
+                <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--c-primary)' }}>
+                  🏅 Rennen war heute — wie bist du gelaufen?
+                </div>
+                <div style={{ fontSize: 11, color: 'var(--c-text-3)', marginTop: 2 }}>
+                  Trag dein Ergebnis ein und feier deinen Erfolg!
+                </div>
+              </div>
+              <button
+                onClick={() => setShowResultForm(true)}
+                style={{
+                  padding: '8px 14px', borderRadius: 20, border: 'none',
+                  background: 'var(--c-primary)', color: '#fff',
+                  fontWeight: 700, fontSize: 12, cursor: 'pointer', fontFamily: 'var(--font)',
+                  whiteSpace: 'nowrap', flexShrink: 0,
+                }}>
+                Ergebnis eintragen
+              </button>
+            </div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--c-primary)' }}>
+                Deine Zielzeit: {goal.target_time_sec ? formatFinishTime(goal.target_time_sec) : '—'}
+              </div>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                <input
+                  type="text"
+                  className="form-input"
+                  placeholder="h:mm:ss oder mm:ss"
+                  value={resultInput}
+                  onChange={e => setResultInput(e.target.value)}
+                  style={{ flex: 1, fontSize: 14, padding: '8px 10px' }}
+                  autoFocus
+                />
+                <button
+                  disabled={!resultInput.trim() || resultSaving}
+                  onClick={async () => {
+                    const parts = resultInput.trim().split(':').map(Number)
+                    let sec = null
+                    if (parts.length === 2) sec = parts[0] * 60 + parts[1]
+                    if (parts.length === 3) sec = parts[0] * 3600 + parts[1] * 60 + parts[2]
+                    if (!sec) return
+                    setResultSaving(true)
+                    await onRecordResult(goal.id, sec)
+                    setResultSaving(false)
+                  }}
+                  style={{
+                    padding: '8px 16px', borderRadius: 8, border: 'none',
+                    background: resultInput.trim() ? 'var(--c-primary)' : 'var(--c-border)',
+                    color: '#fff', fontWeight: 700, fontSize: 13,
+                    cursor: resultInput.trim() ? 'pointer' : 'default',
+                    fontFamily: 'var(--font)', opacity: resultSaving ? 0.6 : 1,
+                  }}>
+                  {resultSaving ? '…' : '✓'}
+                </button>
+                <button onClick={() => setShowResultForm(false)}
+                  style={{ background: 'none', border: 'none', color: 'var(--c-text-3)', fontSize: 18, cursor: 'pointer', lineHeight: 1 }}>
+                  ✕
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -913,8 +992,42 @@ function GoalCelebrationModal({ goal, onClose }) {
           <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--c-text)', marginBottom: 6 }}>
             {goal.title}
           </div>
+          {/* Show actual vs target for race goals */}
+          {goal.actual_time_sec && (
+            <div style={{
+              background: 'var(--c-bg)', borderRadius: 10, padding: '10px 14px',
+              marginBottom: 16, display: 'flex', justifyContent: 'space-around',
+            }}>
+              <div style={{ textAlign: 'center' }}>
+                <div style={{ fontSize: 11, color: 'var(--c-text-3)', marginBottom: 2 }}>Ergebnis</div>
+                <div style={{ fontSize: 20, fontWeight: 800, color: '#22c55e' }}>
+                  {formatFinishTime(goal.actual_time_sec)}
+                </div>
+              </div>
+              {goal.target_time_sec && (
+                <div style={{ textAlign: 'center' }}>
+                  <div style={{ fontSize: 11, color: 'var(--c-text-3)', marginBottom: 2 }}>Ziel</div>
+                  <div style={{ fontSize: 20, fontWeight: 800, color: 'var(--c-text-2)' }}>
+                    {formatFinishTime(goal.target_time_sec)}
+                  </div>
+                </div>
+              )}
+              {goal.target_time_sec && (
+                <div style={{ textAlign: 'center' }}>
+                  <div style={{ fontSize: 11, color: 'var(--c-text-3)', marginBottom: 2 }}>Differenz</div>
+                  <div style={{ fontSize: 20, fontWeight: 800, color: goal.actual_time_sec <= goal.target_time_sec ? '#22c55e' : '#ef4444' }}>
+                    {goal.actual_time_sec <= goal.target_time_sec
+                      ? `-${formatFinishTime(goal.target_time_sec - goal.actual_time_sec)}`
+                      : `+${formatFinishTime(goal.actual_time_sec - goal.target_time_sec)}`}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
           <div style={{ fontSize: 13, color: 'var(--c-text-3)', marginBottom: 24, lineHeight: 1.5 }}>
-            Großartige Leistung — das harte Training hat sich ausgezahlt!
+            {goal.actual_time_sec && goal.target_time_sec && goal.actual_time_sec <= goal.target_time_sec
+              ? 'Ziel erreicht! Das harte Training hat sich ausgezahlt! 🎯'
+              : 'Großartige Leistung — jedes Rennen bringt wertvolle Erfahrung!'}
           </div>
           <button
             onClick={onClose}
@@ -972,6 +1085,17 @@ export default function StatsTab({ user, profile, workoutLogs, stravaRuns, train
       .eq('id', id).eq('user_id', user.id)
     setGoals(g => g.filter(goal => goal.id !== id))
     if (goal) setCelebrationGoal(goal)
+  }
+
+  async function handleRecordResult(id, actualTimeSec) {
+    const goal = goals.find(g => g.id === id)
+    await supabase.from('goals').update({
+      status: 'achieved',
+      achieved_at: new Date().toISOString(),
+      actual_time_sec: actualTimeSec,
+    }).eq('id', id).eq('user_id', user.id)
+    setGoals(g => g.filter(goal => goal.id !== id))
+    if (goal) setCelebrationGoal({ ...goal, actual_time_sec: actualTimeSec })
   }
 
   const totalRuns = stravaRuns.length
@@ -1069,6 +1193,7 @@ export default function StatsTab({ user, profile, workoutLogs, stravaRuns, train
                     profile={profile}
                     onDelete={handleDeleteGoal}
                     onAchieve={handleAchieveGoal}
+                    onRecordResult={handleRecordResult}
                   />
                 ))}
               </div>

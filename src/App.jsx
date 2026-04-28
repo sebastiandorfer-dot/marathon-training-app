@@ -19,6 +19,35 @@ import StatsTab from './components/tabs/StatsTab'
 import { exchangeStravaCode, getValidToken, fetchAllStravaRuns, makeStravaLogRow, filterNewStravaRuns, classifyRunType } from './utils/stravaUtils'
 
 /**
+ * Detect if a new Strava run is a personal record for its distance category.
+ * Returns { category, pace, prevPace, distKm } or null.
+ * pace is sec/km — lower = faster.
+ */
+function detectPR(newRun, allRuns) {
+  const distKm = newRun.distance / 1000
+  const pace = newRun.average_speed ? 1000 / newRun.average_speed : null
+  if (!pace) return null
+
+  let category, minKm, maxKm
+  if      (distKm >= 3  && distKm < 8)  { category = '5 km';          minKm = 3;  maxKm = 8   }
+  else if (distKm >= 8  && distKm < 16) { category = '10 km';         minKm = 8;  maxKm = 16  }
+  else if (distKm >= 16 && distKm < 32) { category = 'Halbmarathon';  minKm = 16; maxKm = 32  }
+  else if (distKm >= 32)                { category = 'Marathon';       minKm = 32; maxKm = 999 }
+  else return null // < 3km — too short for meaningful PR
+
+  const newId = String(newRun.id ?? newRun.strava_id)
+  const existing = allRuns.filter(r => {
+    const rKm = r.distance / 1000
+    return String(r.strava_id) !== newId && r.average_speed && rKm >= minKm && rKm < maxKm
+  })
+
+  if (existing.length === 0) return null // no baseline — first run in category
+
+  const bestExisting = Math.min(...existing.map(r => 1000 / r.average_speed))
+  return pace < bestExisting ? { category, pace, prevPace: bestExisting, distKm } : null
+}
+
+/**
  * Build an RPE feedback queue from a batch of newly inserted Strava runs.
  * Only includes runs from the last 14 days, sorted newest first, max 3.
  */
@@ -52,6 +81,7 @@ export default function App() {
   const [generateError, setGenerateError] = useState('')
   const [onboardingData, setOnboardingData] = useState(null)
   const [stravaError, setStravaError] = useState(null) // null | 'token' | 'network'
+  const [pendingPR, setPendingPR] = useState(null) // { category, pace, prevPace, distKm }
 
   // AI-generated adaptive plan
   const [aiPlan, setAiPlan] = useState(null)
@@ -516,6 +546,13 @@ Antworte mit JSON: {"text": "...", "emoji": "✅|⚠️|🔥|💪|😤"}`,
     }
   }, [profile, stravaRuns])
 
+  // ── Update existing workout log (inline edit) ─────────────────
+  const handleLogUpdated = useCallback((updatedLog) => {
+    const updated = workoutLogsRef.current.map(l => l.id === updatedLog.id ? updatedLog : l)
+    workoutLogsRef.current = updated
+    setWorkoutLogs(updated)
+  }, [])
+
   // ── Delete workout log ─────────────────────────────────────────
   const handleLogDeleted = useCallback(async (logId) => {
     // Update both state and ref together so AI checks don't use stale data
@@ -648,6 +685,11 @@ Antworte mit JSON: {"text": "...", "emoji": "✅|⚠️|🔥|💪|😤"}`,
       }
       if (syncInserted.length > 0) {
         setPendingStravaQueue(buildFeedbackQueue(syncRuns, syncInserted))
+        // Check for personal records among newly synced runs
+        for (const run of syncRuns) {
+          const pr = detectPR(run, merged)
+          if (pr) { setPendingPR(pr); break } // show one PR at a time
+        }
       }
       setStravaRuns(merged)
       setStravaError(null) // sync succeeded — clear any previous error
@@ -771,6 +813,7 @@ Antworte mit JSON: {"text": "...", "emoji": "✅|⚠️|🔥|💪|😤"}`,
               workoutLogs={allWorkoutLogs}
               onLogAdded={handleLogAdded}
               onLogDeleted={handleLogDeleted}
+              onLogUpdated={handleLogUpdated}
               stravaRuns={stravaRuns}
               onConfirmRacePlan={handleConfirmRacePlan}
               aiPlan={aiPlan}
@@ -778,6 +821,8 @@ Antworte mit JSON: {"text": "...", "emoji": "✅|⚠️|🔥|💪|😤"}`,
               lastPlanChange={lastPlanChange}
               onPlanChangeDismiss={() => setLastPlanChange(null)}
               pendingStravaQueue={pendingStravaQueue}
+              pendingPR={pendingPR}
+              onPRDismiss={() => setPendingPR(null)}
               onShiftWorkout={handleShiftWorkout}
               onStravaFeedback={async (rpe, notes, paceFeedback) => {
                 const current = pendingStravaQueue[0]
