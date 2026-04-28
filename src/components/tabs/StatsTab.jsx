@@ -70,7 +70,11 @@ function longestRun(stravaRuns, days = 90) {
   return Math.max(...recent.map(r => r.distance / 1000))
 }
 
-/** Calculate goal progress (0–1) + display strings */
+/**
+ * Calculate goal progress (0–1) + display strings.
+ * Uses Riegel projection for time/race goals — consistent with estimateAchievementDate.
+ * Returns `noTimeTarget: true` for "just finish" race goals (no progress bar makes sense).
+ */
 function calcGoalProgress(goal, stravaRuns, workoutLogs) {
   if (goal.type === 'distance') {
     const target = goal.target_distance_km
@@ -88,18 +92,18 @@ function calcGoalProgress(goal, stravaRuns, workoutLogs) {
   if (goal.type === 'time') {
     const targetKm = goal.race_distance_km || 5
     const targetSec = goal.target_time_sec
-    // Use runs ≥ 60% of target distance to estimate pace
-    const bestPace = bestPaceForDistance(stravaRuns, targetKm * 0.6)
-    if (!bestPace || !targetSec) {
+    // Riegel projection — same model as estimateAchievementDate for consistency
+    const predictedSec = bestProjectedTime(stravaRuns, targetKm, 90) ||
+                         bestProjectedTime(stravaRuns, targetKm, 365)
+    if (!predictedSec || !targetSec) {
       return { pct: 0, current: '—', target: formatFinishTime(targetSec), label: 'Zielzeit', achieved: false }
     }
-    const predictedSec = bestPace * targetKm
     const pct = Math.min(1, targetSec / predictedSec)
     return {
       pct,
       current: formatFinishTime(Math.round(predictedSec)),
       target: formatFinishTime(targetSec),
-      label: `${goal.race_distance_km || 5} km Ziel`,
+      label: `${goal.race_distance_km || 5} km Prognose`,
       achieved: predictedSec <= targetSec,
     }
   }
@@ -107,21 +111,23 @@ function calcGoalProgress(goal, stravaRuns, workoutLogs) {
   if (goal.type === 'race') {
     const km = goal.race_distance_km || RACE_DISTANCES.find(d => d.id === goal.race_distance)?.km || 10
     const targetSec = goal.target_time_sec
-    const bestPace = bestPaceForDistance(stravaRuns, km * 0.5)
+    const predictedSec = bestProjectedTime(stravaRuns, km, 90) ||
+                         bestProjectedTime(stravaRuns, km, 365)
 
-    if (!bestPace) {
-      return { pct: 0, current: '—', target: targetSec ? formatFinishTime(targetSec) : 'Finishen', label: 'Zielzeit', achieved: false }
-    }
-    const predictedSec = bestPace * km
+    // "Just finish" goal — no time target, progress bar is meaningless
     if (!targetSec) {
-      // No target time — show current prediction, progress = 0 (no target to measure against)
       return {
         pct: 0,
-        current: formatFinishTime(Math.round(predictedSec)),
-        target: 'Kein Zeitlimit',
+        noTimeTarget: true,
+        current: predictedSec ? formatFinishTime(Math.round(predictedSec)) : null,
+        target: null,
         label: 'Prognose',
         achieved: false,
       }
+    }
+
+    if (!predictedSec) {
+      return { pct: 0, current: '—', target: formatFinishTime(targetSec), label: 'Zielzeit', achieved: false }
     }
     const pct = Math.min(1, targetSec / predictedSec)
     return {
@@ -134,6 +140,26 @@ function calcGoalProgress(goal, stravaRuns, workoutLogs) {
   }
 
   return { pct: 0, current: '—', target: '—', label: '', achieved: false }
+}
+
+/** Hint shown when prediction is unavailable — tells user what run is needed */
+function predictionHint(goal, stravaRuns) {
+  if (goal.type === 'distance') {
+    return stravaRuns.length === 0 ? 'Lauf dein erstes Training für eine Prognose' : null
+  }
+  if (goal.type === 'time' || goal.type === 'race') {
+    const targetKm = goal.race_distance_km ||
+      RACE_DISTANCES.find(d => d.id === goal.race_distance)?.km || 5
+    const minKm = targetKm * 0.2
+    const hasQualifying = stravaRuns.some(
+      r => r.average_speed && r.distance >= minKm * 1000
+    )
+    if (!hasQualifying) {
+      const needed = minKm < 2 ? `${Math.round(minKm * 1000)} m` : `${Math.ceil(minKm)} km`
+      return `Lauf ${needed}+ für eine Prognose`
+    }
+  }
+  return null
 }
 
 /**
@@ -412,12 +438,13 @@ function VolumeChart({ data }) {
 // ── Goal Card ──────────────────────────────────────────────────────────────────
 
 function GoalCard({ goal, stravaRuns, workoutLogs, trainingPlan, profile, onDelete, onAchieve }) {
-  const [confirmDelete, setConfirmDelete] = useState(false)
+  const [menuOpen, setMenuOpen] = useState(false)
   const prog = useMemo(() => calcGoalProgress(goal, stravaRuns, workoutLogs), [goal, stravaRuns, workoutLogs])
   const prediction = useMemo(
     () => estimateAchievementDate(goal, stravaRuns, trainingPlan, profile),
     [goal, stravaRuns, trainingPlan, profile]
   )
+  const hint = useMemo(() => !prediction ? predictionHint(goal, stravaRuns) : null, [goal, stravaRuns, prediction])
   const col = progressColor(prog.pct)
 
   const raceLabel = RACE_DISTANCES.find(d => d.id === goal.race_distance)?.label || ''
@@ -428,6 +455,15 @@ function GoalCard({ goal, stravaRuns, workoutLogs, trainingPlan, profile, onDele
     : `Zeitziel · ${goal.race_distance_km || 5} km in ${formatFinishTime(goal.target_time_sec)}`
 
   const typeIcon = goal.type === 'race' ? '🏁' : goal.type === 'distance' ? '📏' : '⚡'
+
+  // Prediction row text
+  const predictionText = prediction && prediction.source !== 'achieved'
+    ? prediction.source === 'plan'
+      ? `Woche ${prediction.weekNum} · ${prediction.date.toLocaleDateString('de-AT', { day: 'numeric', month: 'short', year: 'numeric' })}`
+      : prediction.weeksAway <= 1
+        ? 'Diese Woche erreichbar 🎯'
+        : `~${prediction.weeksAway} Wochen · ${prediction.date.toLocaleDateString('de-AT', { day: 'numeric', month: 'short', year: 'numeric' })}`
+    : null
 
   return (
     <div style={{
@@ -444,7 +480,8 @@ function GoalCard({ goal, stravaRuns, workoutLogs, trainingPlan, profile, onDele
         }} />
       )}
 
-      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, marginBottom: 10 }}>
+      {/* Header */}
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, marginBottom: 12 }}>
         <span style={{ fontSize: 22, flexShrink: 0 }}>{typeIcon}</span>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontWeight: 700, fontSize: 15, color: 'var(--c-text)', display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -453,85 +490,114 @@ function GoalCard({ goal, stravaRuns, workoutLogs, trainingPlan, profile, onDele
           </div>
           <div style={{ fontSize: 12, color: 'var(--c-text-3)', marginTop: 1 }}>{subtitle}</div>
         </div>
-        <button onClick={() => setConfirmDelete(c => !c)}
-          style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--c-text-3)', fontSize: 18, padding: '0 2px', flexShrink: 0 }}>
+        <button onClick={() => setMenuOpen(o => !o)}
+          style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--c-text-3)', fontSize: 18, padding: '0 4px', flexShrink: 0, lineHeight: 1 }}>
           ···
         </button>
       </div>
 
-      {/* Progress bar */}
-      <div style={{ height: 6, borderRadius: 999, background: 'var(--c-bg)', overflow: 'hidden', marginBottom: 8 }}>
+      {/* ── "Just finish" race goal — no progress bar ────────────────────── */}
+      {prog.noTimeTarget ? (
         <div style={{
-          height: '100%', borderRadius: 999,
-          width: `${Math.round(prog.pct * 100)}%`,
-          background: col,
-          transition: 'width 0.6s ease',
-        }} />
-      </div>
-
-      {/* Current vs target */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <div>
-          <div style={{ fontSize: 11, color: 'var(--c-text-3)', marginBottom: 1 }}>{prog.label}</div>
-          <div style={{ fontSize: 15, fontWeight: 700, color: col }}>{prog.current}</div>
-        </div>
-        <div style={{ textAlign: 'right' }}>
-          <div style={{ fontSize: 11, color: 'var(--c-text-3)', marginBottom: 1 }}>Ziel</div>
-          <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--c-text-2)' }}>{prog.target}</div>
-        </div>
-        <div style={{ textAlign: 'right' }}>
-          <div style={{ fontSize: 11, color: 'var(--c-text-3)', marginBottom: 1 }}>Fortschritt</div>
-          <div style={{ fontSize: 15, fontWeight: 700, color: col }}>{Math.round(prog.pct * 100)}%</div>
-        </div>
-      </div>
-
-      {/* Prediction */}
-      {prediction && !prog.achieved && prediction.source !== 'achieved' && (
-        <div style={{
-          marginTop: 10, paddingTop: 10,
-          borderTop: '1px solid var(--c-border)',
-          display: 'flex', alignItems: 'center', gap: 6,
+          display: 'flex', alignItems: 'center', gap: 12,
+          background: 'var(--c-bg)', borderRadius: 10, padding: '10px 14px',
+          marginBottom: 10,
         }}>
-          <span style={{ fontSize: 14 }}>{prediction.source === 'plan' ? '📋' : '🔮'}</span>
+          <span style={{ fontSize: 28 }}>🏁</span>
           <div>
-            <span style={{ fontSize: 11, color: 'var(--c-text-3)', marginRight: 4 }}>
-              {prediction.source === 'plan' ? 'Laut Trainingsplan:' : 'Prognose:'}
-            </span>
-            <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--c-text-2)' }}>
-              {prediction.source === 'plan'
-                ? `Woche ${prediction.weekNum} · ${prediction.date.toLocaleDateString('de-AT', { day: 'numeric', month: 'short', year: 'numeric' })}`
-                : prediction.weeksAway <= 1
-                  ? 'Diese Woche erreichbar'
-                  : `~${prediction.weeksAway} Wochen · ${prediction.date.toLocaleDateString('de-AT', { day: 'numeric', month: 'short', year: 'numeric' })}`
-              }
-            </span>
+            <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--c-text)' }}>Ziel: Finishen</div>
+            {prog.current ? (
+              <div style={{ fontSize: 12, color: 'var(--c-text-3)', marginTop: 2 }}>
+                Aktuelle Prognose: <span style={{ fontWeight: 700, color: 'var(--c-text-2)' }}>{prog.current}</span>
+              </div>
+            ) : (
+              <div style={{ fontSize: 12, color: 'var(--c-text-3)', marginTop: 2 }}>Noch keine Laufdaten</div>
+            )}
           </div>
         </div>
+      ) : (
+        /* ── Normal progress display ── */
+        <>
+          {/* Progress bar */}
+          <div style={{ height: 6, borderRadius: 999, background: 'var(--c-bg)', overflow: 'hidden', marginBottom: 8 }}>
+            <div style={{
+              height: '100%', borderRadius: 999,
+              width: `${Math.round(prog.pct * 100)}%`,
+              background: col, transition: 'width 0.6s ease',
+            }} />
+          </div>
+
+          {/* Current / Target / % */}
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', marginBottom: 2 }}>
+            <div>
+              <div style={{ fontSize: 11, color: 'var(--c-text-3)', marginBottom: 1 }}>{prog.label}</div>
+              <div style={{ fontSize: 15, fontWeight: 700, color: prog.current === '—' ? 'var(--c-text-3)' : col }}>
+                {prog.current}
+              </div>
+            </div>
+            <div style={{ textAlign: 'center' }}>
+              <div style={{ fontSize: 11, color: 'var(--c-text-3)', marginBottom: 1 }}>Fortschritt</div>
+              <div style={{ fontSize: 18, fontWeight: 800, color: col }}>{Math.round(prog.pct * 100)}%</div>
+            </div>
+            <div style={{ textAlign: 'right' }}>
+              <div style={{ fontSize: 11, color: 'var(--c-text-3)', marginBottom: 1 }}>Ziel</div>
+              <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--c-text-2)' }}>{prog.target}</div>
+            </div>
+          </div>
+        </>
       )}
-      {prediction?.source === 'achieved' && !prog.achieved && (
+
+      {/* ── Prediction / hint row ──────────────────────────────────────── */}
+      {!prog.achieved && (
         <div style={{
-          marginTop: 10, paddingTop: 10,
+          marginTop: 8, paddingTop: 8,
           borderTop: '1px solid var(--c-border)',
-          fontSize: 12, color: '#22c55e', fontWeight: 600,
+          display: 'flex', alignItems: 'center', gap: 6, minHeight: 28,
         }}>
-          ✅ Bereits schaffbar — markiere es als erreicht!
+          {prediction?.source === 'achieved' ? (
+            /* Already achievable — nudge to mark it */
+            <>
+              <span style={{ fontSize: 14 }}>✅</span>
+              <span style={{ fontSize: 12, fontWeight: 700, color: '#22c55e' }}>
+                Bereits schaffbar — markiere es als erreicht!
+              </span>
+            </>
+          ) : predictionText ? (
+            /* Real prediction with date */
+            <>
+              <span style={{ fontSize: 13 }}>{prediction.source === 'plan' ? '📋' : '🔮'}</span>
+              <div>
+                <span style={{ fontSize: 11, color: 'var(--c-text-3)', marginRight: 4 }}>
+                  {prediction.source === 'plan' ? 'Laut Trainingsplan:' : 'Wann schaffst du es?'}
+                </span>
+                <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--c-text-2)' }}>
+                  {predictionText}
+                </span>
+              </div>
+            </>
+          ) : hint ? (
+            /* No data — explain what's needed */
+            <>
+              <span style={{ fontSize: 13 }}>💡</span>
+              <span style={{ fontSize: 12, color: 'var(--c-text-3)' }}>{hint}</span>
+            </>
+          ) : null}
         </div>
       )}
 
-      {/* Confirm delete */}
-      {confirmDelete && (
+      {/* ── Action menu (···) ─────────────────────────────────────────── */}
+      {menuOpen && (
         <div style={{ marginTop: 12, display: 'flex', gap: 8, borderTop: '1px solid var(--c-border)', paddingTop: 12 }}>
-          {prog.achieved && (
-            <button onClick={() => { onAchieve(goal.id); setConfirmDelete(false) }}
-              style={{ flex: 1, padding: '8px 0', borderRadius: 8, border: '1px solid #22c55e44', background: '#22c55e11', color: '#22c55e', fontWeight: 600, fontSize: 13, cursor: 'pointer', fontFamily: 'var(--font)' }}>
-              ✅ Als erreicht markieren
-            </button>
-          )}
-          <button onClick={() => { onDelete(goal.id); setConfirmDelete(false) }}
+          {/* "Als erreicht markieren" — always available, not just when auto-detected */}
+          <button onClick={() => { onAchieve(goal.id); setMenuOpen(false) }}
+            style={{ flex: 1, padding: '8px 0', borderRadius: 8, border: '1px solid #22c55e44', background: '#22c55e11', color: '#22c55e', fontWeight: 600, fontSize: 13, cursor: 'pointer', fontFamily: 'var(--font)' }}>
+            ✅ Erreicht!
+          </button>
+          <button onClick={() => { onDelete(goal.id); setMenuOpen(false) }}
             style={{ flex: 1, padding: '8px 0', borderRadius: 8, border: '1px solid #ef444444', background: '#ef444411', color: '#ef4444', fontWeight: 600, fontSize: 13, cursor: 'pointer', fontFamily: 'var(--font)' }}>
             Löschen
           </button>
-          <button onClick={() => setConfirmDelete(false)}
+          <button onClick={() => setMenuOpen(false)}
             style={{ padding: '8px 14px', borderRadius: 8, border: '1px solid var(--c-border)', background: 'transparent', color: 'var(--c-text-3)', fontSize: 13, cursor: 'pointer', fontFamily: 'var(--font)' }}>
             ✕
           </button>

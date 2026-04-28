@@ -755,6 +755,15 @@ function AIContextCard({ aiPlan }) {
 }
 
 function WorkoutHero({ workout, isToday, nextDate, nextWeek, isDone, onToggle, onQuickLog, onShift }) {
+  const [shifted, setShifted] = useState(false)
+
+  function handleShift() {
+    if (!onShift) return
+    onShift()
+    setShifted(true)
+    setTimeout(() => setShifted(false), 3000)
+  }
+
   const color = {
     easy: 'var(--c-easy)', tempo: 'var(--c-tempo)', interval: 'var(--c-interval)',
     long: 'var(--c-long)', recovery: 'var(--c-recovery)', cross: 'var(--c-cross)',
@@ -892,19 +901,20 @@ function WorkoutHero({ workout, isToday, nextDate, nextWeek, isDone, onToggle, o
           {/* Shift to tomorrow — only when not done */}
           {!isDone && onShift && (
             <button
-              onClick={onShift}
+              onClick={handleShift}
+              disabled={shifted}
               style={{
                 width: '100%', padding: '9px 0',
                 borderRadius: 'var(--r-md)',
-                border: '1px solid var(--c-border)',
-                background: 'transparent',
-                color: 'var(--c-text-3)',
-                fontWeight: 500, fontSize: '0.8125rem', cursor: 'pointer',
+                border: `1px solid ${shifted ? '#22c55e55' : 'var(--c-border)'}`,
+                background: shifted ? '#22c55e11' : 'transparent',
+                color: shifted ? '#22c55e' : 'var(--c-text-3)',
+                fontWeight: shifted ? 600 : 500, fontSize: '0.8125rem', cursor: shifted ? 'default' : 'pointer',
                 display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
-                fontFamily: 'var(--font)',
+                fontFamily: 'var(--font)', transition: 'all 0.25s',
               }}
             >
-              📅 Auf morgen verschieben
+              {shifted ? '✓ Auf morgen verschoben' : '📅 Auf morgen verschieben'}
             </button>
           )}
         </div>
