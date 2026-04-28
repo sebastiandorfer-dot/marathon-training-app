@@ -837,11 +837,108 @@ function AddGoalForm({ onSave, onCancel }) {
   )
 }
 
+// ── Goal Celebration Modal ─────────────────────────────────────────────────────
+// Confetti + congratulations overlay shown when a goal is marked achieved.
+function GoalCelebrationModal({ goal, onClose }) {
+  // Auto-dismiss after 5 seconds
+  useEffect(() => {
+    const t = setTimeout(onClose, 5000)
+    return () => clearTimeout(t)
+  }, [onClose])
+
+  const typeIcon = goal.type === 'race' ? '🏁' : goal.type === 'distance' ? '📏' : '⚡'
+
+  return (
+    <>
+      {/* Confetti styles */}
+      <style>{`
+        @keyframes confettiFall {
+          0%   { transform: translateY(-20px) rotate(0deg); opacity: 1; }
+          100% { transform: translateY(100vh) rotate(720deg); opacity: 0; }
+        }
+        @keyframes celebrationPop {
+          0%   { transform: scale(0.5); opacity: 0; }
+          70%  { transform: scale(1.08); }
+          100% { transform: scale(1); opacity: 1; }
+        }
+        .confetti-piece {
+          position: fixed;
+          width: 10px;
+          height: 10px;
+          animation: confettiFall linear forwards;
+          pointer-events: none;
+          z-index: 999;
+        }
+      `}</style>
+
+      {/* Confetti pieces */}
+      {Array.from({ length: 30 }).map((_, i) => (
+        <div key={i} className="confetti-piece" style={{
+          left: `${Math.random() * 100}%`,
+          top: `-20px`,
+          background: ['#22c55e', '#4a9eff', '#f59e0b', '#ef4444', '#c77dff', 'var(--c-primary)'][i % 6],
+          borderRadius: i % 3 === 0 ? '50%' : i % 3 === 1 ? '2px' : '0',
+          animationDuration: `${1.5 + Math.random() * 2}s`,
+          animationDelay: `${Math.random() * 0.8}s`,
+          transform: `rotate(${Math.random() * 360}deg)`,
+        }} />
+      ))}
+
+      {/* Backdrop */}
+      <div
+        onClick={onClose}
+        style={{
+          position: 'fixed', inset: 0, zIndex: 300,
+          background: 'rgba(0,0,0,0.55)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          padding: 24,
+        }}
+      >
+        {/* Card */}
+        <div
+          onClick={e => e.stopPropagation()}
+          style={{
+            background: 'var(--c-bg)',
+            border: '2px solid #22c55e44',
+            borderRadius: 20, padding: '32px 28px',
+            textAlign: 'center', maxWidth: 320, width: '100%',
+            animation: 'celebrationPop 0.4s cubic-bezier(0.34, 1.56, 0.64, 1) forwards',
+            position: 'relative', zIndex: 301,
+          }}
+        >
+          <div style={{ fontSize: 64, marginBottom: 12, lineHeight: 1 }}>{typeIcon}</div>
+          <div style={{ fontSize: 26, fontWeight: 900, color: '#22c55e', marginBottom: 8 }}>
+            Ziel erreicht! 🎉
+          </div>
+          <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--c-text)', marginBottom: 6 }}>
+            {goal.title}
+          </div>
+          <div style={{ fontSize: 13, color: 'var(--c-text-3)', marginBottom: 24, lineHeight: 1.5 }}>
+            Großartige Leistung — das harte Training hat sich ausgezahlt!
+          </div>
+          <button
+            onClick={onClose}
+            style={{
+              width: '100%', padding: '13px 0', borderRadius: 12,
+              border: 'none', background: '#22c55e', color: '#fff',
+              fontWeight: 700, fontSize: 16, cursor: 'pointer',
+              fontFamily: 'var(--font)',
+            }}
+          >
+            Weiter so! 💪
+          </button>
+        </div>
+      </div>
+    </>
+  )
+}
+
 // ── Main StatsTab ──────────────────────────────────────────────────────────────
 
 export default function StatsTab({ user, profile, workoutLogs, stravaRuns, trainingPlan }) {
   const [goals, setGoals] = useState([])
   const [showAdd, setShowAdd] = useState(false)
+  const [celebrationGoal, setCelebrationGoal] = useState(null)
 
   // Load goals from Supabase
   useEffect(() => {
@@ -870,9 +967,11 @@ export default function StatsTab({ user, profile, workoutLogs, stravaRuns, train
   }
 
   async function handleAchieveGoal(id) {
+    const goal = goals.find(g => g.id === id)
     await supabase.from('goals').update({ status: 'achieved', achieved_at: new Date().toISOString() })
       .eq('id', id).eq('user_id', user.id)
     setGoals(g => g.filter(goal => goal.id !== id))
+    if (goal) setCelebrationGoal(goal)
   }
 
   const totalRuns = stravaRuns.length
@@ -881,6 +980,14 @@ export default function StatsTab({ user, profile, workoutLogs, stravaRuns, train
 
   return (
     <div className="screen">
+      {/* Goal Achievement Celebration Modal */}
+      {celebrationGoal && (
+        <GoalCelebrationModal
+          goal={celebrationGoal}
+          onClose={() => setCelebrationGoal(null)}
+        />
+      )}
+
       <div className="screen-header">
         <div>
           <h2 style={{ fontSize: '1.125rem' }}>Statistiken</h2>
