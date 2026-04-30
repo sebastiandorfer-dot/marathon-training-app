@@ -434,6 +434,12 @@ export default function TodayTab({ user, profile, trainingPlan, completedWorkout
             />
           )}
 
+          {/* TAPER PHASE — last 3 weeks before marathon */}
+          {trainingMode === 'race' && pos.status === 'active' && pos.totalWeeks > 0 &&
+           pos.week >= pos.totalWeeks - 2 && (
+            <TaperPhaseCard week={pos.week} totalWeeks={pos.totalWeeks} daysLeft={daysLeft} />
+          )}
+
           {/* REST DAY CARD — when today has no planned workout but plan is active */}
           {trainingMode === 'race' && pos.status === 'active' && trainingPlan && !todayWorkout && nextWorkout && (
             <RestDayCard nextWorkout={nextWorkout} />
@@ -559,6 +565,11 @@ export default function TodayTab({ user, profile, trainingPlan, completedWorkout
           {/* AI CONTEXT CARD — race-mode users in active 18-week plan */}
           {trainingMode === 'race' && !buildPhase && aiPlan && !aiPlanGenerating && (
             <AIContextCard aiPlan={aiPlan} />
+          )}
+
+          {/* LONG RUN PREP CARD — shown when today is a long run */}
+          {todayWorkout?.type === 'long' && (
+            <LongRunCard workout={todayWorkout} profile={profile} />
           )}
 
           {/* Today's Workout */}
@@ -1708,9 +1719,22 @@ function WeekStrip({ trainingPlan, profile, completedWorkoutIds, workoutLogs, po
       background: 'var(--c-card)', border: '1px solid var(--c-border)',
       borderRadius: 12, padding: '10px 12px',
     }}>
-      <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--c-text-3)', textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: 8 }}>
-        Woche {pos.week} · {week.theme || 'Training'}
-      </div>
+      {(() => {
+        const planned = (week.workouts || []).filter(w => w.type !== 'rest').length
+        const done = (week.workouts || []).filter(w => w.type !== 'rest' && completedWorkoutIds.includes(w.id)).length
+        const pct = planned > 0 ? Math.round((done / planned) * 100) : 0
+        const adherenceColor = pct === 100 ? '#22c55e' : pct >= 50 ? '#f59e0b' : 'var(--c-text-3)'
+        return (
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+            <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--c-text-3)', textTransform: 'uppercase', letterSpacing: '0.07em' }}>
+              Woche {pos.week} · {week.theme || 'Training'}
+            </div>
+            <div style={{ fontSize: 10, fontWeight: 700, color: adherenceColor }}>
+              {done}/{planned} ✓
+            </div>
+          </div>
+        )
+      })()}
       <div style={{ display: 'flex', gap: 4, justifyContent: 'space-between' }}>
         {DAYS.map((label, i) => {
           const workout = (week.workouts || []).find(w => w.day_of_week === i)
@@ -1754,6 +1778,86 @@ function WeekStrip({ trainingPlan, profile, completedWorkoutIds, workoutLogs, po
             </div>
           )
         })}
+      </div>
+    </div>
+  )
+}
+
+// ── Taper Phase Card ───────────────────────────────────────────────────────────
+// Shown during the last 3 weeks of the 18-week plan (taper phase).
+function TaperPhaseCard({ week, totalWeeks, daysLeft }) {
+  const weeksLeft = totalWeeks - week + 1
+  const tips = [
+    'Volumen reduzieren — Intensität beibehalten. Dein Körper tankt jetzt auf.',
+    'Mehr schlafen als sonst. Schlaf ist die wichtigste Erholungsmaßnahme.',
+    'Keine neuen Schuhe, keine neuen Nahrungsmittel — nur bewährte Routinen.',
+    'Leichte Nervenspannung ist normal und gut. Vertrau deinem Training.',
+  ]
+  const tip = tips[weeksLeft % tips.length]
+
+  return (
+    <div style={{
+      background: 'linear-gradient(135deg, rgba(139,92,246,0.12), var(--c-card))',
+      border: '1.5px solid rgba(139,92,246,0.4)',
+      borderRadius: 14, padding: '14px 16px',
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
+        <span style={{ fontSize: 22 }}>🎯</span>
+        <div>
+          <div style={{ fontWeight: 800, fontSize: 14, color: 'rgba(167,139,250,1)' }}>
+            Tapering-Phase · Woche {week}/{totalWeeks}
+          </div>
+          <div style={{ fontSize: 12, color: 'var(--c-text-3)', marginTop: 1 }}>
+            {daysLeft != null ? `${daysLeft} Tage bis zum Start` : `${weeksLeft} Woche${weeksLeft !== 1 ? 'n' : ''} verbleibend`}
+          </div>
+        </div>
+      </div>
+      <div style={{ fontSize: 13, color: 'var(--c-text-2)', lineHeight: 1.55, borderTop: '1px solid rgba(139,92,246,0.2)', paddingTop: 8 }}>
+        💡 {tip}
+      </div>
+    </div>
+  )
+}
+
+// ── Long Run Card ──────────────────────────────────────────────────────────────
+// Shown when today's planned workout is a long run.
+function LongRunCard({ workout, profile }) {
+  const targetPaceSec = profile?.target_pace_min != null
+    ? profile.target_pace_min * 60 + (profile.target_pace_sec || 0) : null
+  const longRunPaceZone = targetPaceSec ? getPaceZone('long', targetPaceSec) : null
+
+  const tips = [
+    { icon: '🕐', text: 'Früh starten — Temperatur und Energie sind morgens besser' },
+    { icon: '💧', text: 'Hydration alle 20–30 min, Gel ab km 16 alle 45 min' },
+    { icon: '👟', text: 'Bewährte Schuhe und Kleidung — nichts Neues heute' },
+    { icon: '🐌', text: longRunPaceZone ? `Easy Pace halten: ${longRunPaceZone}` : 'Easy Pace halten — Unterhaltungstempo' },
+  ]
+
+  return (
+    <div style={{
+      background: 'linear-gradient(135deg, rgba(14,165,233,0.1), var(--c-card))',
+      border: '1.5px solid rgba(14,165,233,0.35)',
+      borderRadius: 14, padding: '14px 16px',
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
+        <span style={{ fontSize: 24 }}>🛣️</span>
+        <div>
+          <div style={{ fontWeight: 800, fontSize: 14, color: 'rgba(56,189,248,1)' }}>
+            Long Run Tag
+            {workout.distance_km ? ` · ${workout.distance_km} km` : ''}
+          </div>
+          <div style={{ fontSize: 12, color: 'var(--c-text-3)', marginTop: 1 }}>
+            Der wichtigste Lauf der Woche — lass dir Zeit
+          </div>
+        </div>
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+        {tips.map((t, i) => (
+          <div key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
+            <span style={{ fontSize: 14, flexShrink: 0, marginTop: 1 }}>{t.icon}</span>
+            <span style={{ fontSize: 12, color: 'var(--c-text-2)', lineHeight: 1.45 }}>{t.text}</span>
+          </div>
+        ))}
       </div>
     </div>
   )
