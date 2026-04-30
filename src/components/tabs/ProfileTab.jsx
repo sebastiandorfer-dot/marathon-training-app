@@ -304,6 +304,34 @@ export default function ProfileTab({ user, profile, trainingPlan, workoutLogs, c
             </div>
           )}
 
+          {/* Personal Records */}
+          {profile.personal_records && Object.keys(profile.personal_records).length > 0 && (
+            <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-3)' }}>
+              <h3 style={{ fontSize: '1rem' }}>🏅 Persönliche Bestzeiten</h3>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--sp-3)' }}>
+                {[
+                  { key: 'pr_5k',       label: '5 km',        icon: '🏃' },
+                  { key: 'pr_10k',      label: '10 km',        icon: '⚡' },
+                  { key: 'pr_half',     label: 'Halbmarathon', icon: '🛣️' },
+                  { key: 'pr_marathon', label: 'Marathon',     icon: '🏆' },
+                ].filter(e => profile.personal_records[e.key]).map(e => {
+                  const sec = profile.personal_records[e.key]
+                  const m = Math.floor(sec / 60)
+                  const s = Math.round(sec % 60)
+                  return (
+                    <div key={e.key} style={{ background: 'var(--c-bg)', borderRadius: 10, padding: '10px 12px' }}>
+                      <div style={{ fontSize: 11, color: 'var(--c-text-3)', marginBottom: 2 }}>{e.icon} {e.label}</div>
+                      <div style={{ fontSize: 18, fontWeight: 800, color: 'var(--c-primary)' }}>
+                        {m}:{String(s).padStart(2,'0')}/km
+                      </div>
+                      <div style={{ fontSize: 11, color: 'var(--c-text-3)', marginTop: 1 }}>Beste Pace</div>
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          )}
+
           {/* Stats */}
           <div>
             <h3 style={{ marginBottom: 'var(--sp-3)', fontSize: '1rem' }}>Trainingsstatistik</h3>

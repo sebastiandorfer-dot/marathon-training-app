@@ -439,6 +439,9 @@ export default function TodayTab({ user, profile, trainingPlan, completedWorkout
             <RestDayCard nextWorkout={nextWorkout} />
           )}
 
+          {/* WEEK RECAP — shown on Mondays when there are last-week logs */}
+          <WeekRecapCard workoutLogs={workoutLogs} />
+
           {/* Quick-Log Button — always visible at top */}
           <button
             onClick={() => setLogOpen(o => !o)}
@@ -1723,6 +1726,60 @@ function RestDayCard({ nextWorkout }) {
           </div>
         </div>
       )}
+    </div>
+  )
+}
+
+// ── Week Recap Card ────────────────────────────────────────────────────────────
+// Shown on Mondays with a summary of the previous week's training.
+function WeekRecapCard({ workoutLogs }) {
+  const today = new Date()
+  today.setHours(0, 0, 0, 0)
+  if (today.getDay() !== 1) return null // only on Mondays
+
+  // Last week: Mon–Sun
+  const lastMonday = new Date(today)
+  lastMonday.setDate(today.getDate() - 7)
+  const lastSunday = new Date(today)
+  lastSunday.setDate(today.getDate() - 1)
+
+  const lastWeekLogs = workoutLogs.filter(l => {
+    const d = new Date(l.workout_date)
+    d.setHours(0, 0, 0, 0)
+    return d >= lastMonday && d <= lastSunday
+  })
+
+  if (lastWeekLogs.length === 0) return null
+
+  const totalKm = lastWeekLogs.reduce((s, l) => s + (l.distance_km || 0), 0)
+  const totalMin = lastWeekLogs.reduce((s, l) => s + (l.duration_min || 0), 0)
+  const rpeLogs = lastWeekLogs.filter(l => l.rpe != null)
+  const avgRpe = rpeLogs.length > 0 ? (rpeLogs.reduce((s, l) => s + l.rpe, 0) / rpeLogs.length) : null
+  const rpeEmoji = avgRpe == null ? '' : avgRpe <= 3 ? '😌' : avgRpe <= 6 ? '😤' : '🔥'
+
+  const stats = [
+    { label: 'Einheiten', value: lastWeekLogs.length },
+    totalKm > 0 && { label: 'Kilometer', value: `${totalKm.toFixed(1)} km` },
+    totalMin > 0 && { label: 'Dauer', value: `${Math.round(totalMin)} min` },
+    avgRpe != null && { label: 'Ø RPE', value: `${rpeEmoji} ${avgRpe.toFixed(1)}` },
+  ].filter(Boolean)
+
+  return (
+    <div style={{
+      background: 'var(--c-primary-dim)', border: '1px solid var(--c-primary)',
+      borderRadius: 14, padding: '14px 16px',
+    }}>
+      <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--c-primary)', textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: 8 }}>
+        📅 Letzte Woche · {lastMonday.toLocaleDateString('de-AT', { day: 'numeric', month: 'short' })} – {lastSunday.toLocaleDateString('de-AT', { day: 'numeric', month: 'short' })}
+      </div>
+      <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+        {stats.map((s, i) => (
+          <div key={i}>
+            <div style={{ fontSize: 18, fontWeight: 800, color: 'var(--c-text)', lineHeight: 1 }}>{s.value}</div>
+            <div style={{ fontSize: 11, color: 'var(--c-text-3)', marginTop: 2 }}>{s.label}</div>
+          </div>
+        ))}
+      </div>
     </div>
   )
 }

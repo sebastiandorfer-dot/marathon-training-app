@@ -1048,6 +1048,122 @@ function GoalCelebrationModal({ goal, onClose }) {
 
 // ── Main StatsTab ──────────────────────────────────────────────────────────────
 
+// ── PR Board ───────────────────────────────────────────────────────────────────
+function PRBoard({ personalRecords }) {
+  const entries = [
+    { key: 'pr_5k',      label: '5 km',        icon: '🏃' },
+    { key: 'pr_10k',     label: '10 km',        icon: '⚡' },
+    { key: 'pr_half',    label: 'Halbmarathon', icon: '🛣️' },
+    { key: 'pr_marathon',label: 'Marathon',     icon: '🏆' },
+  ]
+  const prs = personalRecords || {}
+  const hasAny = entries.some(e => prs[e.key])
+  if (!hasAny) return null
+
+  function fmtPace(sec) {
+    if (!sec) return null
+    const m = Math.floor(sec / 60)
+    const s = Math.round(sec % 60)
+    return `${m}:${String(s).padStart(2,'0')}/km`
+  }
+
+  return (
+    <div>
+      <h3 style={{ fontSize: '1rem', marginBottom: 'var(--sp-3)' }}>Persönliche Bestzeiten 🏅</h3>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--sp-3)' }}>
+        {entries.map(e => {
+          const pace = prs[e.key]
+          if (!pace) return null
+          return (
+            <div key={e.key} style={{
+              background: 'var(--c-card)', border: '1px solid var(--c-border)',
+              borderRadius: 12, padding: '12px 14px',
+              display: 'flex', flexDirection: 'column', gap: 4,
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <span style={{ fontSize: 14 }}>{e.icon}</span>
+                <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--c-text-3)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{e.label}</span>
+              </div>
+              <div style={{ fontSize: 18, fontWeight: 800, color: 'var(--c-primary)', lineHeight: 1 }}>
+                {fmtPace(pace)}
+              </div>
+              <div style={{ fontSize: 11, color: 'var(--c-text-3)' }}>Beste Pace · Strava</div>
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+// ── RPE Trend Chart ────────────────────────────────────────────────────────────
+function RPETrendChart({ workoutLogs }) {
+  const logsWithRpe = [...workoutLogs]
+    .filter(l => l.rpe != null && l.workout_date)
+    .sort((a, b) => new Date(a.workout_date) - new Date(b.workout_date))
+    .slice(-14) // last 14 logged workouts with RPE
+
+  if (logsWithRpe.length < 3) return null
+
+  const W = 320, H = 100, PAD = { t: 12, r: 8, b: 24, l: 28 }
+  const innerW = W - PAD.l - PAD.r
+  const innerH = H - PAD.t - PAD.b
+  const n = logsWithRpe.length
+
+  const xScale = i => PAD.l + (i / Math.max(n - 1, 1)) * innerW
+  const yScale = v => PAD.t + innerH - ((v - 1) / 9) * innerH // RPE 1–10
+
+  // 3-point rolling average
+  const rollingAvg = logsWithRpe.map((_, i) => {
+    const slice = logsWithRpe.slice(Math.max(0, i - 1), i + 2)
+    return slice.reduce((s, l) => s + l.rpe, 0) / slice.length
+  })
+
+  const linePath = rollingAvg.map((v, i) => `${i === 0 ? 'M' : 'L'}${xScale(i).toFixed(1)},${yScale(v).toFixed(1)}`).join(' ')
+
+  const rpeColor = rpe => rpe <= 3 ? '#22c55e' : rpe <= 6 ? '#f59e0b' : '#ef4444'
+  const avgRpe = logsWithRpe.reduce((s, l) => s + l.rpe, 0) / n
+
+  return (
+    <div>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--c-text)' }}>RPE-Verlauf</div>
+        <div style={{ fontSize: 12, color: 'var(--c-text-3)' }}>
+          Ø {avgRpe.toFixed(1)} · letzte {n} Einheiten
+        </div>
+      </div>
+      <svg viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', overflow: 'visible' }}>
+        {/* Grid lines at RPE 3, 6, 10 */}
+        {[3, 6, 10].map(v => (
+          <g key={v}>
+            <line x1={PAD.l} y1={yScale(v)} x2={W - PAD.r} y2={yScale(v)}
+              stroke="var(--c-border)" strokeWidth={0.5} strokeDasharray="3,3" />
+            <text x={PAD.l - 4} y={yScale(v) + 4} fontSize={9} fill="var(--c-text-3)" textAnchor="end">{v}</text>
+          </g>
+        ))}
+        {/* Rolling avg line */}
+        <path d={linePath} fill="none" stroke="var(--c-primary)" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round" opacity={0.6} />
+        {/* Dots */}
+        {logsWithRpe.map((l, i) => (
+          <circle key={i} cx={xScale(i)} cy={yScale(l.rpe)} r={4}
+            fill={rpeColor(l.rpe)} stroke="var(--c-card)" strokeWidth={1.5} />
+        ))}
+        {/* Date labels: first + last */}
+        {[0, n - 1].map(i => (
+          <text key={i} x={xScale(i)} y={H - 4} fontSize={9} fill="var(--c-text-3)" textAnchor={i === 0 ? 'start' : 'end'}>
+            {new Date(logsWithRpe[i].workout_date).toLocaleDateString('de-AT', { day: 'numeric', month: 'short' })}
+          </text>
+        ))}
+      </svg>
+      <div style={{ display: 'flex', gap: 12, marginTop: 6, fontSize: 11, color: 'var(--c-text-3)' }}>
+        <span><span style={{ color: '#22c55e', fontWeight: 700 }}>●</span> Locker (1–3)</span>
+        <span><span style={{ color: '#f59e0b', fontWeight: 700 }}>●</span> Moderat (4–6)</span>
+        <span><span style={{ color: '#ef4444', fontWeight: 700 }}>●</span> Hart (7–10)</span>
+      </div>
+    </div>
+  )
+}
+
 class StatsErrorBoundary extends Component {
   constructor(props) { super(props); this.state = { error: null } }
   static getDerivedStateFromError(error) { return { error } }
@@ -1252,6 +1368,9 @@ function StatsTabInner({ user, profile, workoutLogs, stravaRuns, trainingPlan })
             </div>
           )}
 
+          {/* ── PR BOARD ──────────────────────────────────────────── */}
+          <PRBoard personalRecords={profile?.personal_records} />
+
           {/* ── BEST PERFORMANCES ─────────────────────────────────── */}
           {stravaRuns.length >= 3 && (
             <div>
@@ -1273,6 +1392,16 @@ function StatsTabInner({ user, profile, workoutLogs, stravaRuns, trainingPlan })
                   </div>
                 ))}
               </div>
+            </div>
+          )}
+
+          {/* ── RPE TREND ─────────────────────────────────────────── */}
+          {workoutLogs.filter(l => l.rpe != null).length >= 3 && (
+            <div style={{
+              background: 'var(--c-card)', border: '1px solid var(--c-border)',
+              borderRadius: 14, padding: '16px',
+            }}>
+              <RPETrendChart workoutLogs={workoutLogs} />
             </div>
           )}
 
