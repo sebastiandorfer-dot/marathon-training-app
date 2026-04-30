@@ -19,6 +19,25 @@ import StatsTab from './components/tabs/StatsTab'
 import { exchangeStravaCode, getValidToken, fetchAllStravaRuns, makeStravaLogRow, filterNewStravaRuns, classifyRunType } from './utils/stravaUtils'
 
 /**
+ * Persist a detected PR into profiles.personal_records (jsonb).
+ * Keys: pr_5k | pr_10k | pr_half | pr_marathon — value: pace in sec/km.
+ */
+async function savePR(pr, userId) {
+  const keyMap = { '5 km': 'pr_5k', '10 km': 'pr_10k', 'Halbmarathon': 'pr_half', 'Marathon': 'pr_marathon' }
+  const key = keyMap[pr.category]
+  if (!key) return
+  try {
+    const { data } = await supabase.from('profiles').select('personal_records').eq('id', userId).single()
+    const existing = data?.personal_records || {}
+    if (!existing[key] || pr.pace < existing[key]) {
+      await supabase.from('profiles').update({ personal_records: { ...existing, [key]: Math.round(pr.pace) } }).eq('id', userId)
+    }
+  } catch (err) {
+    console.warn('Failed to save PR:', err)
+  }
+}
+
+/**
  * Detect if a new Strava run is a personal record for its distance category.
  * Returns { category, pace, prevPace, distKm } or null.
  * pace is sec/km — lower = faster.
@@ -617,6 +636,16 @@ Antworte mit JSON: {"text": "...", "emoji": "✅|⚠️|🔥|💪|😤"}`,
         workoutLogsRef.current = merged
         setWorkoutLogs(merged)
         setPendingStravaQueue(buildFeedbackQueue(toInsert, inserted))
+        // PR detection for manually triggered Strava syncs (FitnessTab)
+        const allRuns = newRuns
+        for (const run of toInsert) {
+          const pr = detectPR(run, allRuns)
+          if (pr) {
+            setPendingPR(pr)
+            if (profile?.id) savePR(pr, profile.id)
+            break
+          }
+        }
       }
     }
 
@@ -688,7 +717,11 @@ Antworte mit JSON: {"text": "...", "emoji": "✅|⚠️|🔥|💪|😤"}`,
         // Check for personal records among newly synced runs
         for (const run of syncRuns) {
           const pr = detectPR(run, merged)
-          if (pr) { setPendingPR(pr); break } // show one PR at a time
+          if (pr) {
+            setPendingPR(pr)
+            savePR(pr, currentProfile.id)
+            break // show one PR at a time
+          }
         }
       }
       setStravaRuns(merged)

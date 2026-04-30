@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from 'react'
+import { useState, useMemo, useEffect, Component } from 'react'
 import { supabase } from '../../supabase'
 import {
   computePaceTrend,
@@ -1048,7 +1048,30 @@ function GoalCelebrationModal({ goal, onClose }) {
 
 // ── Main StatsTab ──────────────────────────────────────────────────────────────
 
-export default function StatsTab({ user, profile, workoutLogs, stravaRuns, trainingPlan }) {
+class StatsErrorBoundary extends Component {
+  constructor(props) { super(props); this.state = { error: null } }
+  static getDerivedStateFromError(error) { return { error } }
+  render() {
+    if (this.state.error) {
+      return (
+        <div className="screen">
+          <div className="screen-content" style={{ padding: 24, textAlign: 'center' }}>
+            <div style={{ fontSize: 32, marginBottom: 12 }}>⚠️</div>
+            <div style={{ fontWeight: 700, color: 'var(--c-text)', marginBottom: 8 }}>Statistiken konnten nicht geladen werden</div>
+            <div style={{ fontSize: 13, color: 'var(--c-text-3)', marginBottom: 20 }}>{this.state.error?.message}</div>
+            <button onClick={() => this.setState({ error: null })}
+              style={{ padding: '10px 20px', borderRadius: 10, border: 'none', background: 'var(--c-primary)', color: '#fff', fontWeight: 700, cursor: 'pointer' }}>
+              Erneut versuchen
+            </button>
+          </div>
+        </div>
+      )
+    }
+    return this.props.children
+  }
+}
+
+function StatsTabInner({ user, profile, workoutLogs, stravaRuns, trainingPlan }) {
   const [goals, setGoals] = useState([])
   const [showAdd, setShowAdd] = useState(false)
   const [celebrationGoal, setCelebrationGoal] = useState(null)
@@ -1256,5 +1279,13 @@ export default function StatsTab({ user, profile, workoutLogs, stravaRuns, train
         </div>
       </div>
     </div>
+  )
+}
+
+export default function StatsTab(props) {
+  return (
+    <StatsErrorBoundary>
+      <StatsTabInner {...props} />
+    </StatsErrorBoundary>
   )
 }

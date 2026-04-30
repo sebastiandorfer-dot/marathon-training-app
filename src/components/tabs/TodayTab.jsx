@@ -155,7 +155,9 @@ export default function TodayTab({ user, profile, trainingPlan, completedWorkout
   const [editingLogId, setEditingLogId] = useState(null)
   const [editForm, setEditForm] = useState({})
   const [editSaving, setEditSaving] = useState(false)
-  const [stravaDiscoveryDismissed, setStravaDiscoveryDismissed] = useState(false)
+  const [stravaDiscoveryDismissed, setStravaDiscoveryDismissed] = useState(
+    () => localStorage.getItem('stravaDiscoveryDismissed') === '1'
+  )
 
   const displayWorkout = todayWorkout || nextWorkout?.workout
 
@@ -572,7 +574,7 @@ export default function TodayTab({ user, profile, trainingPlan, completedWorkout
 
           {/* STRAVA DISCOVERY BANNER — shown when user has logs but no Strava */}
           {!profile.strava_access_token && workoutLogs.length > 0 && !stravaDiscoveryDismissed && (
-            <StravaDiscoveryBanner onDismiss={() => setStravaDiscoveryDismissed(true)} />
+            <StravaDiscoveryBanner onDismiss={() => { localStorage.setItem('stravaDiscoveryDismissed', '1'); setStravaDiscoveryDismissed(true) }} />
           )}
 
           {/* Recent Activity */}

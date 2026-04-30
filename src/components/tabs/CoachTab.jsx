@@ -52,9 +52,9 @@ export default function CoachTab({ user, profile, trainingPlan, workoutLogs, cha
     const alerts = []
     const sorted = [...workoutLogs].sort((a, b) => new Date(b.workout_date) - new Date(a.workout_date))
 
-    // RPE=3 streak (2+ hard sessions in a row)
+    // RPE >= 8 streak (2+ hard sessions in a row)
     const recentRpes = sorted.slice(0, 3).filter(l => l.rpe != null).map(l => l.rpe)
-    if (recentRpes.length >= 2 && recentRpes.slice(0, 2).every(r => r === 3)) {
+    if (recentRpes.length >= 2 && recentRpes.slice(0, 2).every(r => r >= 8)) {
       alerts.push({ type: 'fatigue', icon: '😮‍💨', text: '2+ harte Einheiten hintereinander — Erholungsplanung wichtig' })
     }
 
