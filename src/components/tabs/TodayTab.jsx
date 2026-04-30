@@ -369,9 +369,9 @@ export default function TodayTab({ user, profile, trainingPlan, completedWorkout
             />
           )}
 
-          {/* PERSONAL RECORD BANNER */}
+          {/* PERSONAL RECORD CELEBRATION */}
           {pendingPR && (
-            <PRBanner pr={pendingPR} onDismiss={onPRDismiss} />
+            <PRCelebrationModal pr={pendingPR} onDismiss={onPRDismiss} />
           )}
 
           {/* RACE-DAY COUNTDOWN — ≤21 Tage bis Marathon */}
@@ -572,6 +572,7 @@ export default function TodayTab({ user, profile, trainingPlan, completedWorkout
               onToggle={() => onToggleComplete(displayWorkout.id)}
               onQuickLog={() => handleQuickLog(displayWorkout)}
               onShift={onShiftWorkout ? () => onShiftWorkout(displayWorkout.id) : null}
+              profile={profile}
             />
           )}
 
@@ -901,7 +902,31 @@ function AIContextCard({ aiPlan }) {
   )
 }
 
-function WorkoutHero({ workout, isToday, nextDate, nextWeek, isDone, onToggle, onQuickLog, onShift }) {
+/**
+ * Compute a target pace zone string for a workout type.
+ * Returns e.g. "5:45–6:15/km" or null if not applicable.
+ * targetPaceSec = marathon target pace in sec/km.
+ */
+function getPaceZone(workoutType, targetPaceSec) {
+  if (!targetPaceSec || targetPaceSec <= 0) return null
+  const fmtPace = sec => {
+    const m = Math.floor(sec / 60)
+    const s = Math.round(sec % 60)
+    return `${m}:${String(s).padStart(2, '0')}`
+  }
+  const zones = {
+    easy:     [targetPaceSec + 60,  targetPaceSec + 90],
+    recovery: [targetPaceSec + 90,  targetPaceSec + 120],
+    long:     [targetPaceSec + 30,  targetPaceSec + 75],
+    tempo:    [targetPaceSec - 20,  targetPaceSec - 5],
+    interval: [targetPaceSec - 70,  targetPaceSec - 40],
+  }
+  const zone = zones[workoutType]
+  if (!zone) return null
+  return `${fmtPace(zone[0])}–${fmtPace(zone[1])}/km`
+}
+
+function WorkoutHero({ workout, isToday, nextDate, nextWeek, isDone, onToggle, onQuickLog, onShift, profile }) {
   const [shifted, setShifted] = useState(false)
 
   function handleShift() {
@@ -994,12 +1019,21 @@ function WorkoutHero({ workout, isToday, nextDate, nextWeek, isDone, onToggle, o
             <div className="workout-hero-stat-label">Dauer</div>
           </div>
         )}
-        {workout.pace_target && (
-          <div className="workout-hero-stat">
-            <div className="workout-hero-stat-value" style={{ fontSize: '1rem' }}>{workout.pace_target}</div>
-            <div className="workout-hero-stat-label">Zielpace</div>
-          </div>
-        )}
+        {(() => {
+          const displayPace = workout.pace_target || (() => {
+            const tSec = profile?.target_pace_min != null
+              ? profile.target_pace_min * 60 + (profile.target_pace_sec || 0)
+              : null
+            return getPaceZone(workout.type, tSec)
+          })()
+          if (!displayPace) return null
+          return (
+            <div className="workout-hero-stat">
+              <div className="workout-hero-stat-value" style={{ fontSize: '0.95rem' }}>{displayPace}</div>
+              <div className="workout-hero-stat-label">Tempo-Zone</div>
+            </div>
+          )
+        })()}
       </div>
 
       {isToday && (
@@ -1565,41 +1599,92 @@ function WeeklyFeedbackCard({ weeklyFeedback }) {
 
 // ── PR Banner ──────────────────────────────────────────────────────────────────
 // Celebratory dismissible card when a new personal record is detected from Strava.
-function PRBanner({ pr, onDismiss }) {
+function PRCelebrationModal({ pr, onDismiss }) {
+  useEffect(() => {
+    const t = setTimeout(onDismiss, 6000)
+    return () => clearTimeout(t)
+  }, [onDismiss])
+
   const fmtPace = sec => `${Math.floor(sec / 60)}:${String(Math.round(sec % 60)).padStart(2, '0')}/km`
   const improvement = pr.prevPace ? Math.round(((pr.prevPace - pr.pace) / pr.prevPace) * 100) : null
+  const improvSec = pr.prevPace ? Math.round(pr.prevPace - pr.pace) : null
 
   return (
-    <div style={{
-      background: 'linear-gradient(135deg, #f59e0b18, var(--c-card))',
-      border: '2px solid #f59e0b66', borderRadius: 14, padding: '14px 16px',
-      display: 'flex', alignItems: 'flex-start', gap: 12,
-      animation: 'fadeInDown 0.3s ease',
-    }}>
-      <span style={{ fontSize: 28, flexShrink: 0 }}>🏅</span>
-      <div style={{ flex: 1 }}>
-        <div style={{ fontWeight: 800, fontSize: 15, color: '#f59e0b', marginBottom: 3 }}>
-          Neue persönliche Bestzeit!
-        </div>
-        <div style={{ fontSize: 13, color: 'var(--c-text)', fontWeight: 600 }}>
-          {pr.category} · {fmtPace(pr.pace)}
-          {improvement !== null && improvement > 0 && (
-            <span style={{ color: '#22c55e', marginLeft: 6, fontSize: 12 }}>
-              ({improvement}% schneller)
-            </span>
-          )}
-        </div>
-        {pr.prevPace && (
-          <div style={{ fontSize: 12, color: 'var(--c-text-3)', marginTop: 2 }}>
-            Vorher: {fmtPace(pr.prevPace)}
+    <>
+      <style>{`
+        @keyframes prConfettiFall {
+          0%   { transform: translateY(-20px) rotate(0deg); opacity: 1; }
+          100% { transform: translateY(100vh) rotate(540deg); opacity: 0; }
+        }
+        @keyframes prPop {
+          0%   { transform: scale(0.6) translateY(20px); opacity: 0; }
+          70%  { transform: scale(1.05) translateY(0); }
+          100% { transform: scale(1) translateY(0); opacity: 1; }
+        }
+      `}</style>
+
+      {/* Confetti */}
+      {Array.from({ length: 24 }).map((_, i) => (
+        <div key={i} style={{
+          position: 'fixed', width: 8, height: 8, pointerEvents: 'none', zIndex: 998,
+          left: `${10 + Math.random() * 80}%`, top: '-10px',
+          background: ['#f59e0b','#22c55e','#4a9eff','#ef4444','#c77dff','#fb923c'][i % 6],
+          borderRadius: i % 2 === 0 ? '50%' : '2px',
+          animation: `prConfettiFall ${1.2 + Math.random() * 1.5}s ${Math.random() * 0.5}s linear forwards`,
+        }} />
+      ))}
+
+      {/* Backdrop */}
+      <div onClick={onDismiss} style={{
+        position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', zIndex: 999,
+        display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20,
+      }}>
+        <div onClick={e => e.stopPropagation()} style={{
+          background: 'var(--c-card)', borderRadius: 20, padding: '32px 28px',
+          width: '100%', maxWidth: 340, textAlign: 'center',
+          border: '2px solid #f59e0b66',
+          animation: 'prPop 0.4s cubic-bezier(0.34,1.56,0.64,1) forwards',
+          boxShadow: '0 20px 60px rgba(0,0,0,0.4)',
+        }}>
+          <div style={{ fontSize: 56, marginBottom: 12, lineHeight: 1 }}>🏅</div>
+          <div style={{ fontSize: 13, fontWeight: 700, color: '#f59e0b', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 8 }}>
+            Persönliche Bestzeit!
           </div>
-        )}
+          <div style={{ fontSize: 26, fontWeight: 800, color: 'var(--c-text)', marginBottom: 4 }}>
+            {pr.category}
+          </div>
+          <div style={{ fontSize: 32, fontWeight: 800, color: '#f59e0b', marginBottom: 12, lineHeight: 1 }}>
+            {fmtPace(pr.pace)}
+          </div>
+          {improvSec > 0 && (
+            <div style={{
+              display: 'inline-flex', alignItems: 'center', gap: 6,
+              background: '#22c55e18', border: '1px solid #22c55e44',
+              borderRadius: 20, padding: '6px 14px', marginBottom: 16,
+            }}>
+              <span style={{ color: '#22c55e', fontWeight: 700, fontSize: 14 }}>
+                ↑ {improvSec}s schneller
+              </span>
+              {improvement > 0 && (
+                <span style={{ color: '#22c55e', fontSize: 12 }}>({improvement}%)</span>
+              )}
+            </div>
+          )}
+          {pr.prevPace && (
+            <div style={{ fontSize: 13, color: 'var(--c-text-3)', marginBottom: 20 }}>
+              Vorher: {fmtPace(pr.prevPace)}
+            </div>
+          )}
+          <button onClick={onDismiss} style={{
+            width: '100%', padding: '12px 20px', borderRadius: 12, border: 'none',
+            background: '#f59e0b', color: '#fff', fontWeight: 700, fontSize: 15,
+            cursor: 'pointer', fontFamily: 'var(--font)',
+          }}>
+            Weiter trainieren 💪
+          </button>
+        </div>
       </div>
-      <button onClick={onDismiss}
-        style={{ background: 'none', border: 'none', color: 'var(--c-text-3)', fontSize: 18, cursor: 'pointer', lineHeight: 1, flexShrink: 0 }}>
-        ×
-      </button>
-    </div>
+    </>
   )
 }
 

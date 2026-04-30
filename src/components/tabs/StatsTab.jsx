@@ -1098,12 +1098,27 @@ function PRBoard({ personalRecords }) {
 
 // ── RPE Trend Chart ────────────────────────────────────────────────────────────
 function RPETrendChart({ workoutLogs }) {
-  const logsWithRpe = [...workoutLogs]
+  const allWithRpe = [...workoutLogs]
     .filter(l => l.rpe != null && l.workout_date)
     .sort((a, b) => new Date(a.workout_date) - new Date(b.workout_date))
-    .slice(-14) // last 14 logged workouts with RPE
+
+  const logsWithRpe = allWithRpe.slice(-14) // last 14 for chart
 
   if (logsWithRpe.length < 3) return null
+
+  // Training load: compare last 7 days vs last 28 days avg RPE
+  const now = Date.now()
+  const week1 = allWithRpe.filter(l => now - new Date(l.workout_date).getTime() < 7 * 864e5)
+  const week4 = allWithRpe.filter(l => now - new Date(l.workout_date).getTime() < 28 * 864e5)
+  const recentAvg = week1.length > 0 ? week1.reduce((s, l) => s + l.rpe, 0) / week1.length : null
+  const baselineAvg = week4.length > 1 ? week4.reduce((s, l) => s + l.rpe, 0) / week4.length : null
+  const loadStatus = (() => {
+    if (!recentAvg || !baselineAvg) return null
+    const ratio = recentAvg / baselineAvg
+    if (ratio > 1.25) return { color: '#ef4444', label: 'Hoch', dot: '🔴', tip: 'Mehr als 25% über deinem Durchschnitt — Erholung einplanen' }
+    if (ratio > 1.1)  return { color: '#f59e0b', label: 'Erhöht', dot: '🟡', tip: 'Leicht über deinem Durchschnitt — gut beobachten' }
+    return               { color: '#22c55e', label: 'Gut', dot: '🟢', tip: 'Belastung im normalen Bereich' }
+  })()
 
   const W = 320, H = 100, PAD = { t: 12, r: 8, b: 24, l: 28 }
   const innerW = W - PAD.l - PAD.r
@@ -1132,6 +1147,29 @@ function RPETrendChart({ workoutLogs }) {
           Ø {avgRpe.toFixed(1)} · letzte {n} Einheiten
         </div>
       </div>
+
+      {/* Training load badge */}
+      {loadStatus && (
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 8,
+          background: loadStatus.color + '15', border: `1px solid ${loadStatus.color}44`,
+          borderRadius: 10, padding: '8px 12px', marginBottom: 12,
+        }}>
+          <span style={{ fontSize: 14 }}>{loadStatus.dot}</span>
+          <div style={{ flex: 1 }}>
+            <span style={{ fontWeight: 700, fontSize: 13, color: loadStatus.color }}>
+              Trainingsbelastung: {loadStatus.label}
+            </span>
+            <div style={{ fontSize: 11, color: 'var(--c-text-3)', marginTop: 1 }}>{loadStatus.tip}</div>
+          </div>
+          {recentAvg && baselineAvg && (
+            <div style={{ textAlign: 'right', flexShrink: 0 }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: loadStatus.color }}>{recentAvg.toFixed(1)}</div>
+              <div style={{ fontSize: 10, color: 'var(--c-text-3)' }}>7T / Ø{baselineAvg.toFixed(1)}</div>
+            </div>
+          )}
+        </div>
+      )}
       <svg viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', overflow: 'visible' }}>
         {/* Grid lines at RPE 3, 6, 10 */}
         {[3, 6, 10].map(v => (
