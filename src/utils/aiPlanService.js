@@ -359,7 +359,7 @@ Antworte NUR mit validem JSON (kein Markdown, keine Erklärung davor/danach):
 
   const { data: proxyData, error: proxyError } = await supabaseClient.functions.invoke('ai-proxy', {
     body: {
-      model: 'claude-haiku-4-5',
+      model: 'claude-haiku-4-5-20251001',
       max_tokens: 1200,
       messages: [{ role: 'user', content: prompt }],
     },

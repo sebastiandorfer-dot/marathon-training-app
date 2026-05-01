@@ -7,6 +7,7 @@ import {
   getMarathonTimeRange, weeklyMileageStats,
 } from '../../utils/fitnessUtils'
 import { getTodayBuildEntry } from '../../utils/buildPhaseUtils'
+import { useCoachIdentity } from '../../hooks/useCoachIdentity'
 
 // Derive coach name + avatar from Supabase user metadata (same logic as TodayTab)
 function useCoachIdentity(user) {
