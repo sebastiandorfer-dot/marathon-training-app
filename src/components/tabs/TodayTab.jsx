@@ -14,6 +14,7 @@ import {
 } from '../../utils/planUtils'
 import BuildPhaseToday from '../BuildPhaseToday'
 import { useCoachIdentity } from '../../hooks/useCoachIdentity'
+import { useCoachIdentity } from '../../hooks/useCoachIdentity'
 
 const WORKOUT_TYPES = [
   { value: 'easy',     label: '🏃 Easy Lauf' },
