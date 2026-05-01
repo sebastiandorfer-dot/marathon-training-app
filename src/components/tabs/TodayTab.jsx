@@ -13,6 +13,7 @@ import {
   getMondayOf,
 } from '../../utils/planUtils'
 import BuildPhaseToday from '../BuildPhaseToday'
+import { useCoachIdentity } from '../../hooks/useCoachIdentity'
 
 const WORKOUT_TYPES = [
   { value: 'easy',     label: '🏃 Easy Lauf' },
@@ -93,15 +94,6 @@ const TYPE_ICONS = {
 }
 
 function todayStr() { return new Date().toISOString().split('T')[0] }
-
-// Derive coach name + avatar from Supabase user metadata
-function useCoachIdentity(user) {
-  const fullName = user?.user_metadata?.full_name || user?.user_metadata?.name || ''
-  const firstName = fullName.split(' ')[0] || 'Seb'
-  const coachName = `Coach ${firstName}`
-  const avatarUrl = user?.user_metadata?.avatar_url || user?.user_metadata?.picture || '/coach-avatar.gif'
-  return { coachName, firstName, avatarUrl }
-}
 
 export default function TodayTab({ user, profile, trainingPlan, completedWorkoutIds, onToggleComplete, workoutLogs, onLogAdded, onLogDeleted, onLogUpdated, stravaRuns = [], onConfirmRacePlan, aiPlan = null, aiPlanGenerating = false, lastPlanChange = null, onPlanChangeDismiss, pendingStravaQueue = [], onStravaFeedback, onShiftWorkout, pendingPR = null, onPRDismiss }) {
   const maxHR = useMemo(() => deriveMaxHR(stravaRuns), [stravaRuns])

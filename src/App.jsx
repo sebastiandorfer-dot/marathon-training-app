@@ -84,6 +84,8 @@ function buildFeedbackQueue(stravaRuns, insertedLogs) {
   }).filter(Boolean)
 }
 
+const REGEN_FIELDS = ['training_days', 'sessions_per_week', 'flexibility_mode', 'marathon_date', 'target_pace_min', 'target_pace_sec']
+
 // Views: 'loading' | 'auth' | 'onboarding' | 'generating' | 'app'
 export default function App() {
   const [view, setView] = useState('loading')
@@ -237,6 +239,7 @@ Antworte mit JSON: {"text": "...", "emoji": "✅|⚠️|🔥|💪|😤"}`,
       } else if (event === 'SIGNED_OUT') {
         setUser(null); setProfile(null); setTrainingPlan(null)
         setCompletedWorkoutIds([]); setWorkoutLogs([]); setChatMessages([])
+        stravaAutoSyncRef.current = false
         setView('auth')
       }
     })
@@ -590,7 +593,6 @@ Antworte mit JSON: {"text": "...", "emoji": "✅|⚠️|🔥|💪|😤"}`,
 
   // ── Update profile ─────────────────────────────────────────────
   // When key training fields change, also regenerate the AI plan.
-  const REGEN_FIELDS = ['training_days', 'sessions_per_week', 'flexibility_mode', 'marathon_date', 'target_pace_min', 'target_pace_sec']
   const handleProfileUpdate = useCallback((updatedProfile) => {
     setProfile(prev => {
       // Check if any planning-relevant field changed
